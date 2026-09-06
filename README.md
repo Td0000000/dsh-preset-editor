@@ -1,43 +1,22 @@
-<div align="center">
-
 # dsh-preset-editor（预设编辑）
 
-### DeepSeek Harness 官方自定义预设可视化编辑插件
+DeepSeek Harness 自定义预设可视化编辑插件。
 
-可视化编辑、管理与编排自定义 Agent 预设，完全融入官方预设体系，多消息类型自由调序，AI 工具自由配备，开箱即用自动注入。
-
-<p>
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-4b8f77" alt="MIT License"></a>
-  <a href="https://nodejs.org/"><img src="https://img.shields.io/badge/Node.js-18+-339933?logo=node.js&logoColor=white" alt="Node.js 18+"></a>
-  <a href="https://github.com/Td0000000/dsh-preset-editor"><img src="https://img.shields.io/badge/DSH-0.1.x-blue" alt="DSH 0.1.x"></a>
-</p>
-
-</div>
+支持对自定义 Agent 预设进行可视化创建、编辑、管理与导入导出，支持 `system`、`user`、`assistant` 消息自由调序与编排，支持自主配备 AI 工具，直接融入官方 Agent 预设体系，新会话一键选择即可默认自动注入。
 
 ---
 
-## 💖 致谢与项目溯源（Credits & Origin）
+## 💡 致谢与灵感来源
 
-本项目灵感与核心注入理念源自原开源项目 **[dsh-preset-plus](https://github.com/Rain-kl/dsh-preset-plus)**（原作者：**[Rain-kl](https://github.com/Rain-kl)**）。
+本项目的灵感源自原作者 **[Rain-kl](https://github.com/Rain-kl)** 的开源项目 **[dsh-preset-plus](https://github.com/Rain-kl/dsh-preset-plus)**，非常感谢原作者的开源分享与探索！
 
-原项目参考了酒馆（SillyTavern）的提示词编排思想，在 DSH 框架下创新性地实现了基于伪装上下文（`[system] → [user] → [assistant]`）的多条目注入机制。在此向原作者 **Rain-kl** 致以由衷的敬意与感谢！
+这本身都是用于 DSH 的插件，我主要是为了自己平时使用起来更顺手、更符合个人的工作流，在原项目上下文注入思想的基础上做了一些**个人使用习惯的魔改与适用性修改**：
 
-> **说明**：本项目在原项目优秀的上下文前置注入思想的基础上，进行了**深度的魔改、架构重构与官方适配性修改**，旨在让预设编辑完全融入 DeepSeek Harness 官方的 Agent Presets 原生体系，消除命令操作感，提供更优雅的双向同步与工具配备体验。
-
----
-
-## 🔄 相比原项目的重构与魔改升级
-
-| 功能维度 | 原参考项目 (`dsh-preset-plus`) | 本重构项目 (`dsh-preset-editor`) |
-| :--- | :--- | :--- |
-| **触发与运行机制** | 依赖固定模式 `preset-plus`，支持 `/preset-plus`、`/prefill` 等 slash 命令 | **彻底移除所有 `/` 命令**；纯粹基于会话绑定的预设自动触发注入，无命令感 |
-| **官方预设兼容性** | 仅作为一个名为 `preset-plus` 的单一模式运行，无法在官方预设列表中以多个独立预设展示 | **每个预设都是合法的官方自定义预设**；生成标准的 `preset.yml` 与 `agent.cordis.yml`，直达官方选择器与设置项 |
-| **文件存储与同步** | 集中依赖全局 JSON 文件；在官方删除预设后无法实时同步 | **文件夹即预设（Folder-as-Preset）**；以物理文件系统为唯一真源，官方删除实时同步消除，官方复制自动吸纳 |
-| **AI 工具配备** | 固定跟随包内写死的模式工具配置 | **全套 AI 工具自选配备**；支持自由勾选官方全套工具（Bash、PowerShell、文件、检索、Web、技能、任务等） |
-| **隔离域架构安全** | 未按官方细分隔离组，容易发生服务碰撞 | **严格遵循官方 `editing-cordis-compositions` 创作规范**，自动包裹 `workflowEngine`、`compaction`、`planMode` 隔离域 |
-| **消息类型与约束** | 传统角色描述；顶部规则松散 | **标准化使用 `system` / `user` / `assistant` 纯英文标准字段**；严格约束顶级首条必须为启用的 `system` |
-| **UI 交互排版** | 纵向折叠卡片，带有模式开关与命令提示 | **全新四大横向导航入口**：`当前预设`、`+ 新建预设`、`导入预设`、`{{}} 变量说明`，视觉与官方主题无缝契合 |
-| **模板变量解析** | 未提示变量解析范围与错误边界 | **内置完整的官方 3 大模板变量（`{{model}}`、`{{provider}}`、`{{cwd}}`）使用规范与非法位置拦截提示** |
+- **去掉所有斜杠命令**：删除了 `/preset-plus` 等命令，直接在聊天右上角选哪个预设就自动注入生效，没有多余命令感；
+- **对齐官方自定义预设体系**：建立的预设直接写入官方的 `.agent-presets/<id>/` 目录，能直接显示在官方的「自定义预设」和右上角下拉菜单中；
+- **文件夹即预设（双向同步）**：以物理文件夹为准，在官方设置里删除了预设，这边刷新也会同步消失，不会出现两边不同步的问题；
+- **自己选配备哪些 AI 工具**：做了一个【AI工具】按钮，可以按需为当前预设勾选需要带的工具插件（已做官方隔离域适配，避免服务冲突）；
+- **微调界面与操作**：改成了横排按钮导航（当前预设、新建预设、导入预设、{{}} 变量说明），规范消息角色为纯英文 `system`/`user`/`assistant`，并确保顶级首条固定为启用的系统提示词。
 
 ---
 
@@ -55,7 +34,7 @@
    - **官方删除实时同步**：在官方设置中删除自定义预设时，由于物理文件夹被移除，本插件页面一键刷新即刻同步消除，绝不残留或回滚复活。
    - **官方复制自动纳管**：在官方界面通过“复制”新建的预设目录，本插件能自动发现并纳管。
 4. **可视化消息编排与顶级强约束**
-   - 标准采用开发级英文角色字段：`system`、`user`、`assistant`（不带任何冗余括号与中文干扰）。
+   - 标准采用开发级英文角色字段：`system`、`user`、`assistant`。
    - **顶级强约束**：预设首条（`#1`）强制固定为启用的 `system` 消息，不可关闭、不可删除、不可移出首位，确保系统提示词基石稳固。
    - 支持通过 **`↑ 上移`** / **`↓ 下移`** 按钮自由调整消息在上下文中的排列位置与执行顺序。
    - 每条条目支持独立启用/停用开关、实时内容修改与删除。
@@ -121,4 +100,4 @@ dsh plugin --profile web add link:./plugins/dsh-preset-editor
 
 ## 📄 许可证
 
-本项目沿用原项目的宽松开源协议：[MIT License](LICENSE)。
+本项目沿用宽松开源协议：[MIT License](LICENSE)。
