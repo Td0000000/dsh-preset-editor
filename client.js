@@ -557,7 +557,7 @@ window.__ModuleLoader__.load({
           h("div", { style: S.navBar },
             h("button", {
               style: S.navButton(view === "current"),
-              onClick: () => { setView("current"); setDraft(null); },
+              onClick: () => { setView("current"); setDraft(null); loadState(); },
             }, "当前预设"),
             h("button", {
               style: S.navButton(view === "create"),
