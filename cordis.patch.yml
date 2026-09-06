@@ -1,0 +1,6 @@
+# dsh-preset-editor bundle patch
+- insert:
+    - id: dsh-preset-editor
+      name: 'dsh-preset-editor'
+      config:
+        enabled: true
