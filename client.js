@@ -29,6 +29,8 @@ window.__ModuleLoader__.load({
       accentHover: "var(--dsw-alias-brand-hover, #2563eb)",
       danger: "var(--dsw-alias-state-error-primary, #ef4444)",
       dangerBg: "rgba(239, 68, 68, 0.12)",
+      warning: "var(--dsw-alias-state-warning-primary, #f59e0b)",
+      warningBg: "rgba(245, 158, 11, 0.12)",
       success: "var(--dsw-alias-state-success-primary, #10b981)",
       successBg: "rgba(16, 185, 129, 0.12)",
       roleSys: "#3b82f6",
@@ -220,12 +222,25 @@ window.__ModuleLoader__.load({
         boxShadow: "0 20px 40px rgba(0,0,0,0.5)",
         overflow: "hidden",
       },
+      warningBanner: {
+        padding: "10px 14px",
+        borderRadius: "8px",
+        background: THEME.warningBg,
+        border: "1px solid rgba(245, 158, 11, 0.35)",
+        color: THEME.warning,
+        fontSize: "12px",
+        lineHeight: 1.5,
+        display: "flex",
+        alignItems: "center",
+        gap: "8px",
+      },
     };
 
+    // 正常开发的三个英文标准字段名（不带括号）
     const ROLE_OPTIONS = [
-      { key: "system", label: "SYS", desc: "系统提示词", color: THEME.roleSys },
-      { key: "user", label: "USER", desc: "用户破限/引导", color: THEME.roleUser },
-      { key: "assistant", label: "ASSISTANT", desc: "助理伪装前置", color: THEME.roleAssistant },
+      { key: "system", label: "system", color: THEME.roleSys },
+      { key: "user", label: "user", color: THEME.roleUser },
+      { key: "assistant", label: "assistant", color: THEME.roleAssistant },
     ];
 
     function downloadFile(content, filename, contentType = "application/json") {
@@ -251,6 +266,7 @@ window.__ModuleLoader__.load({
       // 编辑/新建预设草稿
       const [draft, setDraft] = useState(null);
       const [showToolsModal, setShowToolsModal] = useState(false);
+      const [showVariablesModal, setShowVariablesModal] = useState(false);
       const [deleteConfirmId, setDeleteConfirmId] = useState(null);
 
       const fileInputRef = useRef(null);
@@ -304,10 +320,11 @@ window.__ModuleLoader__.load({
           name: "",
           description: "",
           enabledTools: defaultToolIds.length > 0 ? defaultToolIds : ["tool-bash", "tool-pwsh", "tool-fs", "tool-fs-search", "tool-web", "tool-skill", "tool-ask-user", "tool-todo"],
+          // 顶级第一条必须是 system 且为启用状态
           entries: [
-            { id: "e-1", role: "system", text: "You are a helpful coding assistant.", enabled: true },
-            { id: "e-2", role: "user", text: "请以专业标准协助我完成任务。", enabled: true },
-            { id: "e-3", role: "assistant", text: "收到，请说明具体需求，我将提供清晰详尽的方案与代码实现。", enabled: true },
+            { id: "e-1", role: "system", text: "", enabled: true },
+            { id: "e-2", role: "user", text: "", enabled: true },
+            { id: "e-3", role: "assistant", text: "", enabled: true },
           ],
         });
         setView("create");
@@ -316,7 +333,13 @@ window.__ModuleLoader__.load({
 
       // 进入编辑预设页面
       const handleOpenEdit = (preset) => {
-        setDraft(JSON.parse(JSON.stringify(preset)));
+        const copy = JSON.parse(JSON.stringify(preset));
+        // 确保顶级第一条必须是启用状态的 system
+        if (copy.entries && copy.entries.length > 0) {
+          copy.entries[0].role = "system";
+          copy.entries[0].enabled = true;
+        }
+        setDraft(copy);
         setView("edit");
         setNotice({ kind: "idle", text: "" });
       };
@@ -341,6 +364,16 @@ window.__ModuleLoader__.load({
         }
         if (!draft.name.trim()) {
           setNotice({ kind: "error", text: "请输入预设名称。" });
+          return;
+        }
+
+        // 强约束校验：顶级必须有一个 system 处于启用状态
+        if (!draft.entries || draft.entries.length === 0) {
+          setNotice({ kind: "error", text: "预设消息列表不能为空，顶级必须有一个 system 提示词。" });
+          return;
+        }
+        if (draft.entries[0].role !== "system" || draft.entries[0].enabled !== true) {
+          setNotice({ kind: "error", text: "顶级第一条必须是 system 且必须处于启用状态！" });
           return;
         }
 
@@ -453,12 +486,21 @@ window.__ModuleLoader__.load({
 
       const updateEntry = (idx, patch) => {
         setDraft((prev) => {
-          const entries = prev.entries.map((e, i) => (i === idx ? { ...e, ...patch } : e));
+          const entries = prev.entries.map((e, i) => {
+            if (i === idx) {
+              // 顶级第一条强制保持 system 且启用
+              if (idx === 0) {
+                return { ...e, ...patch, role: "system", enabled: true };
+              }
+              return { ...e, ...patch };
+            }
+            return e;
+          });
           return { ...prev, entries };
         });
       };
 
-      const addEntry = (role = "system") => {
+      const addEntry = (role = "user") => {
         setDraft((prev) => ({
           ...prev,
           entries: [
@@ -469,6 +511,7 @@ window.__ModuleLoader__.load({
       };
 
       const removeEntry = (idx) => {
+        if (idx === 0) return; // 顶级第一条不允许删除
         setDraft((prev) => ({
           ...prev,
           entries: prev.entries.filter((_, i) => i !== idx),
@@ -476,9 +519,12 @@ window.__ModuleLoader__.load({
       };
 
       const moveEntry = (idx, dir) => {
+        // 第一条顶级不可移动；其他条目不可移动到第 0 位
+        const targetIdx = idx + dir;
+        if (idx === 0 || targetIdx <= 0) return;
+
         setDraft((prev) => {
-          const targetIdx = idx + dir;
-          if (targetIdx < 0 || targetIdx >= prev.entries.length) return prev;
+          if (targetIdx >= prev.entries.length) return prev;
           const copy = [...prev.entries];
           const item = copy[idx];
           copy[idx] = copy[targetIdx];
@@ -521,6 +567,10 @@ window.__ModuleLoader__.load({
               style: S.navButton(false),
               onClick: handleImportClick,
             }, "导入预设"),
+            h("button", {
+              style: S.navButton(showVariablesModal),
+              onClick: () => setShowVariablesModal(true),
+            }, "{{}} 变量说明"),
             // 状态提示
             notice.kind === "ok" ? h("span", {
               style: {
@@ -553,16 +603,19 @@ window.__ModuleLoader__.load({
         );
       };
 
-      // 渲染当前预设列表视图
+      // 渲染当前预设列表视图（初次安装默认为空）
       const renderCurrentView = () => {
         if (!doc) {
           return h("p", { style: { color: THEME.muted, fontSize: "13px" } }, "正在读取预设…");
         }
 
         if (presetsList.length === 0) {
-          return h("div", { style: Object.assign({}, S.card, { alignItems: "center", padding: "40px 20px" }) },
-            h("p", { style: { color: THEME.muted, fontSize: "14px", margin: "0 0 14px" } }, "暂无任何自定义预设"),
-            h("button", { style: S.btnPrimary, onClick: handleOpenCreate }, "创建第一个预设"),
+          return h("div", { style: Object.assign({}, S.card, { alignItems: "center", padding: "48px 20px" }) },
+            h("div", { style: { fontSize: "36px", marginBottom: "8px" } }, "📝"),
+            h("p", { style: { color: THEME.ink, fontSize: "15px", fontWeight: 600, margin: "0 0 6px" } }, "暂无任何自定义预设"),
+            h("p", { style: { color: THEME.muted, fontSize: "13px", margin: "0 0 18px", textAlign: "center", maxWidth: "420px" } },
+              "点击下方按钮新建您的第一个专属预设，保存后可在聊天页面右上角一键切换，享受全套自定义提示词与配备工具。"),
+            h("button", { style: S.btnPrimary, onClick: handleOpenCreate }, "+ 新建预设"),
           );
         }
 
@@ -612,10 +665,10 @@ window.__ModuleLoader__.load({
                 }, p.description) : null,
                 // 结构标签
                 h("div", { style: { display: "flex", gap: "6px", flexWrap: "wrap", alignItems: "center" } },
-                  h("span", { style: S.badge("rgba(59, 130, 246, 0.12)", THEME.roleSys) }, `SYS: ${sysCount}`),
-                  h("span", { style: S.badge("rgba(16, 185, 129, 0.12)", THEME.roleUser) }, `USER: ${userCount}`),
-                  h("span", { style: S.badge("rgba(139, 92, 246, 0.12)", THEME.roleAssistant) }, `ASSISTANT: ${asstCount}`),
-                  h("span", { style: { fontSize: "11px", color: THEME.dim, marginLeft: "auto" } }, `总计 ${(p.entries || []).length} 条消息`),
+                  h("span", { style: S.badge("rgba(59, 130, 246, 0.12)", THEME.roleSys) }, `system: ${sysCount}`),
+                  h("span", { style: S.badge("rgba(16, 185, 129, 0.12)", THEME.roleUser) }, `user: ${userCount}`),
+                  h("span", { style: S.badge("rgba(139, 92, 246, 0.12)", THEME.roleAssistant) }, `assistant: ${asstCount}`),
+                  h("span", { style: { fontSize: "11px", color: THEME.dim, marginLeft: "auto" } }, `总计 ${(p.entries || []).length} 条`),
                 ),
                 // 卡片操作按钮行
                 h("div", {
@@ -660,12 +713,135 @@ window.__ModuleLoader__.load({
         );
       };
 
+      // 渲染官方 {{}} 变量说明弹窗
+      const renderVariablesModal = () => {
+        if (!showVariablesModal) return null;
+
+        return h("div", {
+          style: S.modalOverlay,
+          onClick: () => setShowVariablesModal(false),
+        },
+          h("div", {
+            style: S.modalContent,
+            onClick: (e) => e.stopPropagation(),
+          },
+            // 头部
+            h("div", {
+              style: {
+                padding: "16px 20px",
+                borderBottom: "1px solid " + THEME.border,
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+              },
+            },
+              h("h3", { style: { margin: 0, fontSize: "16px", fontWeight: 650 } }, "官方 {{}} 模板变量说明"),
+              h("button", {
+                style: Object.assign({}, S.btnSecondary, { padding: "4px 10px", fontSize: "12px" }),
+                onClick: () => setShowVariablesModal(false),
+              }, "✕ 关闭"),
+            ),
+            // 内容区域
+            h("div", {
+              style: {
+                padding: "18px 20px",
+                overflowY: "auto",
+                display: "flex",
+                flexDirection: "column",
+                gap: "16px",
+              },
+            },
+              // 顶端核心警示
+              h("div", { style: S.warningBanner },
+                h("span", { style: { fontSize: "18px", flexShrink: 0 } }, "⚠️"),
+                h("div", null,
+                  h("strong", null, "特别注意："),
+                  " 官方准备好的 {{}} 模板变量由 DSH 核心系统提示词引擎在组装时动态渲染，",
+                  h("strong", { style: { textDecoration: "underline" } }, "仅支持在 system 消息中使用"),
+                  "！如果写到除 system 之外的 user 或 assistant 消息中，将无法被系统解析或导致报错！",
+                ),
+              ),
+
+              h("div", { style: { fontSize: "13px", color: THEME.ink, lineHeight: 1.6 } },
+                "在 system 提示词中，您可以直接书写以下变量占位符，运行时 DSH 会自动将其替换为当前会话的真实环境参数：",
+              ),
+
+              // 变量列表表格/卡片
+              h("div", { style: { display: "flex", flexDirection: "column", gap: "10px" } },
+                h("div", {
+                  style: {
+                    padding: "12px 14px",
+                    borderRadius: "8px",
+                    border: "1px solid " + THEME.border,
+                    background: THEME.panel,
+                  },
+                },
+                  h("div", { style: { display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" } },
+                    h("code", { style: { color: THEME.accent, fontWeight: 700, fontSize: "13px" } }, "{{model}}"),
+                    h("span", { style: S.badge("rgba(59, 130, 246, 0.12)", THEME.accent) }, "当前模型"),
+                  ),
+                  h("div", { style: { fontSize: "12px", color: THEME.muted } },
+                    "解析为当前会话所选用的具体大模型名称（例如 deepseek-chat、deepseek-reasoner 等）。",
+                  ),
+                ),
+                h("div", {
+                  style: {
+                    padding: "12px 14px",
+                    borderRadius: "8px",
+                    border: "1px solid " + THEME.border,
+                    background: THEME.panel,
+                  },
+                },
+                  h("div", { style: { display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" } },
+                    h("code", { style: { color: THEME.accent, fontWeight: 700, fontSize: "13px" } }, "{{cwd}}"),
+                    h("span", { style: S.badge("rgba(16, 185, 129, 0.12)", THEME.roleUser) }, "工作区路径"),
+                  ),
+                  h("div", { style: { fontSize: "12px", color: THEME.muted } },
+                    "解析为当前会话所绑定的本地工作区根目录绝对路径（Working Directory）。",
+                  ),
+                ),
+              ),
+
+              h("div", {
+                style: {
+                  padding: "12px 14px",
+                  borderRadius: "8px",
+                  background: "rgba(255,255,255,.025)",
+                  border: "1px dashed " + THEME.border,
+                  fontSize: "12px",
+                  color: THEME.dim,
+                  lineHeight: 1.5,
+                },
+              },
+                "示例（仅写在 system 提示词中）：",
+                h("div", { style: { fontFamily: "monospace", color: THEME.ink, marginTop: "6px" } },
+                  "你是一个由 {{model}} 模型驱动的专业编程助手。当前工作区位于 {{cwd}}，请协助用户分析和解决代码问题。",
+                ),
+              ),
+            ),
+            // 底部
+            h("div", {
+              style: {
+                padding: "12px 20px",
+                borderTop: "1px solid " + THEME.border,
+                display: "flex",
+                justifyContent: "flex-end",
+              },
+            },
+              h("button", {
+                style: S.btnPrimary,
+                onClick: () => setShowVariablesModal(false),
+              }, "我知道了"),
+            ),
+          ),
+        );
+      };
+
       // 渲染 AI 工具配备弹窗
       const renderToolsModal = () => {
         if (!showToolsModal || !draft) return null;
         const currentEnabled = new Set(draft.enabledTools || []);
 
-        // 工具按分类归集
         const categories = {};
         for (const t of allTools) {
           const cat = t.category || "常用工具";
@@ -693,7 +869,7 @@ window.__ModuleLoader__.load({
             },
               h("div", null,
                 h("h3", { style: { margin: 0, fontSize: "16px", fontWeight: 650 } }, "AI 工具配备"),
-                h("p", { style: { margin: "4px 0 0", fontSize: "12px", color: THEME.muted } }, "选择该预设会话在启动时所携带的工具插件（包含官方所有内置工具及已装扩展）"),
+                h("p", { style: { margin: "4px 0 0", fontSize: "12px", color: THEME.muted } }, "选择该预设会话在启动时所配备的工具插件（包含官方全套工具与隔离组）"),
               ),
               h("button", {
                 style: Object.assign({}, S.btnSecondary, { padding: "4px 10px", fontSize: "12px" }),
@@ -783,6 +959,17 @@ window.__ModuleLoader__.load({
         const pageTitle = isCreate ? "新建预设" : `编辑预设 - ${draft.name || draft.id}`;
 
         return h("div", { style: { display: "flex", flexDirection: "column", gap: "18px" } },
+          // 页面顶端变量规则警示横幅
+          h("div", { style: S.warningBanner },
+            h("span", { style: { fontSize: "16px", flexShrink: 0 } }, "⚠️"),
+            h("div", null,
+              h("strong", null, "模板变量规则提示："),
+              " 官方准备好的 {{model}}、{{cwd}} 等 {{}} 变量仅支持写在 ",
+              h("strong", { style: { textDecoration: "underline" } }, "system"),
+              " 消息中；若写到除了 system 外的 user 或 assistant 消息中会导致报错！",
+            ),
+          ),
+
           // 顶部标题与操作栏
           h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px" } },
             h("h2", { style: { margin: 0, fontSize: "18px", fontWeight: 700 } }, pageTitle),
@@ -872,27 +1059,27 @@ window.__ModuleLoader__.load({
             h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } },
               h("div", null,
                 h("span", { style: { fontSize: "14px", fontWeight: 650 } }, "提示词模板与对话前置编排"),
-                h("span", { style: { fontSize: "12px", color: THEME.muted, marginLeft: "8px" } }, "（支持 SYS、USER、ASSISTANT 三类消息，位置完全可上下拖动调整）"),
+                h("span", { style: { fontSize: "12px", color: THEME.muted, marginLeft: "8px" } }, "（顶级必须为启用的 system，其余消息类型与位置可自由增删调序）"),
               ),
               h("div", { style: { display: "flex", gap: "6px" } },
                 h("button", {
                   style: Object.assign({}, S.btnSecondary, { padding: "5px 10px", fontSize: "12px", color: THEME.roleSys }),
                   onClick: () => addEntry("system"),
-                }, "+ SYS"),
+                }, "+ system"),
                 h("button", {
                   style: Object.assign({}, S.btnSecondary, { padding: "5px 10px", fontSize: "12px", color: THEME.roleUser }),
                   onClick: () => addEntry("user"),
-                }, "+ USER"),
+                }, "+ user"),
                 h("button", {
                   style: Object.assign({}, S.btnSecondary, { padding: "5px 10px", fontSize: "12px", color: THEME.roleAssistant }),
                   onClick: () => addEntry("assistant"),
-                }, "+ ASSISTANT"),
+                }, "+ assistant"),
               ),
             ),
 
             // 消息列表
             draft.entries.map((entry, idx) => {
-              const isFirst = idx === 0;
+              const isFirst = idx === 0; // 顶级首条
               const isLast = idx === draft.entries.length - 1;
               const currentRole = ROLE_OPTIONS.find((r) => r.key === entry.role) || ROLE_OPTIONS[0];
 
@@ -908,7 +1095,7 @@ window.__ModuleLoader__.load({
                 // 条目头部控制栏
                 h("div", { style: { display: "flex", alignItems: "center", gap: "10px", flexWrap: "wrap" } },
                   h("span", { style: { fontSize: "12px", fontWeight: 700, color: THEME.dim } }, `#${idx + 1}`),
-                  // 角色选择下拉
+                  // 角色选择下拉（顶级首条固定为 system，不可修改）
                   h("select", {
                     style: {
                       padding: "5px 10px",
@@ -918,15 +1105,18 @@ window.__ModuleLoader__.load({
                       color: currentRole.color,
                       fontWeight: 700,
                       fontSize: "12px",
-                      cursor: "pointer",
+                      cursor: isFirst ? "not-allowed" : "pointer",
                       outline: "none",
+                      opacity: isFirst ? 0.8 : 1,
                     },
                     value: entry.role,
+                    disabled: isFirst,
+                    title: isFirst ? "顶级第一条必须固定为 system" : undefined,
                     onChange: (e) => updateEntry(idx, { role: e.target.value }),
                   },
-                    ROLE_OPTIONS.map((r) => h("option", { key: r.key, value: r.key }, `${r.label} (${r.desc})`)),
+                    ROLE_OPTIONS.map((r) => h("option", { key: r.key, value: r.key }, r.label)),
                   ),
-                  // 状态开关
+                  // 状态开关（顶级第一条必须为启用状态，不可关闭）
                   h("label", {
                     style: {
                       display: "inline-flex",
@@ -934,34 +1124,38 @@ window.__ModuleLoader__.load({
                       gap: "5px",
                       fontSize: "12px",
                       color: entry.enabled ? THEME.ink : THEME.dim,
-                      cursor: "pointer",
+                      cursor: isFirst ? "not-allowed" : "pointer",
                       userSelect: "none",
+                      opacity: isFirst ? 0.8 : 1,
                     },
                   },
                     h("input", {
                       type: "checkbox",
                       checked: entry.enabled,
+                      disabled: isFirst,
+                      title: isFirst ? "顶级 system 必须处于启用状态" : undefined,
                       onChange: (e) => updateEntry(idx, { enabled: e.target.checked }),
                     }),
-                    entry.enabled ? "启用" : "已停用",
+                    isFirst ? "必须启用 (顶级)" : (entry.enabled ? "启用" : "已停用"),
                   ),
-                  // 右侧调序与删除按钮组
+                  // 右侧调序与删除按钮组（顶级首条不能上移、下移或删除）
                   h("div", { style: { marginLeft: "auto", display: "flex", alignItems: "center", gap: "6px" } },
                     h("button", {
-                      style: Object.assign({}, S.btnSecondary, { padding: "3px 8px", fontSize: "12px" }, isFirst ? { opacity: 0.3, cursor: "not-allowed" } : {}),
-                      disabled: isFirst,
-                      title: "向上移动位置",
+                      style: Object.assign({}, S.btnSecondary, { padding: "3px 8px", fontSize: "12px" }, (isFirst || idx === 1) ? { opacity: 0.3, cursor: "not-allowed" } : {}),
+                      disabled: isFirst || idx === 1, // 不能越过第 0 位的顶级 system
+                      title: isFirst ? "顶级条目不可移动" : (idx === 1 ? "不可越过顶级 system" : "向上移动位置"),
                       onClick: () => moveEntry(idx, -1),
                     }, "↑ 上移"),
                     h("button", {
-                      style: Object.assign({}, S.btnSecondary, { padding: "3px 8px", fontSize: "12px" }, isLast ? { opacity: 0.3, cursor: "not-allowed" } : {}),
-                      disabled: isLast,
-                      title: "向下移动位置",
+                      style: Object.assign({}, S.btnSecondary, { padding: "3px 8px", fontSize: "12px" }, (isFirst || isLast) ? { opacity: 0.3, cursor: "not-allowed" } : {}),
+                      disabled: isFirst || isLast,
+                      title: isFirst ? "顶级 system 位置固定在首位" : "向下移动位置",
                       onClick: () => moveEntry(idx, 1),
                     }, "↓ 下移"),
                     h("button", {
-                      style: Object.assign({}, S.btnSecondary, { padding: "3px 8px", fontSize: "12px", color: THEME.danger }),
-                      title: "删除本条消息",
+                      style: Object.assign({}, S.btnSecondary, { padding: "3px 8px", fontSize: "12px", color: THEME.danger }, isFirst ? { opacity: 0.3, cursor: "not-allowed" } : {}),
+                      disabled: isFirst,
+                      title: isFirst ? "顶级 system 不可删除" : "删除本条消息",
                       onClick: () => removeEntry(idx),
                     }, "删除"),
                   ),
@@ -971,10 +1165,10 @@ window.__ModuleLoader__.load({
                   style: S.textarea,
                   value: entry.text,
                   placeholder: entry.role === "system"
-                    ? "输入系统主提示词（System Prompt）..."
+                    ? "输入 system 系统提示词（支持官方 {{model}}、{{cwd}} 变量）..."
                     : entry.role === "user"
-                    ? "输入预设用户消息（引导词 / 规则约束 / 破限触发）..."
-                    : "输入预设模型回复伪装消息（Assistant Pre-fill 种子消息）...",
+                    ? "输入 user 消息..."
+                    : "输入 assistant 消息...",
                   onChange: (e) => updateEntry(idx, { text: e.target.value }),
                 }),
               );
@@ -984,7 +1178,7 @@ window.__ModuleLoader__.load({
             h("div", { style: { display: "flex", justifyContent: "center", marginTop: "4px" } },
               h("button", {
                 style: Object.assign({}, S.btnSecondary, { width: "100%", padding: "10px", borderStyle: "dashed" }),
-                onClick: () => addEntry("system"),
+                onClick: () => addEntry("user"),
               }, "+ 添加新消息条目"),
             ),
           ),
@@ -995,6 +1189,7 @@ window.__ModuleLoader__.load({
         renderHeader(),
         view === "current" ? renderCurrentView() : renderEditOrCreateView(),
         renderToolsModal(),
+        renderVariablesModal(),
       );
     }
 
