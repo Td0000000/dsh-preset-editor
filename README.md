@@ -2,7 +2,9 @@
 
 DeepSeek Harness 自定义预设可视化编辑插件。
 
-支持对自定义 Agent 预设进行可视化创建、编辑、管理与导入导出，支持 `system`、`user`、`assistant` 消息自由调序与编排，支持自主配备 AI 工具，直接融入官方 Agent 预设体系，新会话一键选择即可默认自动注入。
+支持对自定义 Agent 预设进行可视化创建、编辑、管理与导入导出，支持 `system`、`user`、`assistant` 消息编排，支持自主配备 AI 工具，直接融入官方 Agent 预设体系，新会话一键选择即可生效。
+
+> **本版本已适配 DSH `0.2.0-rc.x`**（见下方「0.2 适配说明」）。
 
 ---
 
@@ -10,91 +12,87 @@ DeepSeek Harness 自定义预设可视化编辑插件。
 
 本项目的灵感源自原作者 **[Rain-kl](https://github.com/Rain-kl)** 的开源项目 **[dsh-preset-plus](https://github.com/Rain-kl/dsh-preset-plus)**，非常感谢原作者的开源分享与探索！
 
-这本身都是用于 DSH 的插件，我主要是为了自己平时使用起来更顺手、更符合个人的工作流，在原项目上下文注入思想的基础上做了一些**个人使用习惯的魔改与适用性修改**：
-
-- **去掉所有斜杠命令**：删除了 `/preset-plus` 等命令，直接在聊天右上角选哪个预设就自动注入生效，没有多余命令感；
-- **对齐官方自定义预设体系**：建立的预设直接写入官方的 `.agent-presets/<id>/` 目录，能直接显示在官方的「自定义预设」和右上角下拉菜单中；
-- **文件夹即预设（双向同步）**：以物理文件夹为准，在官方设置里删除了预设，这边刷新也会同步消失，不会出现两边不同步的问题；
-- **自己选配备哪些 AI 工具**：做了一个【AI工具】按钮，可以按需为当前预设勾选需要带的工具插件（已做官方隔离域适配，避免服务冲突）；
-- **微调界面与操作**：改成了横排按钮导航（当前预设、新建预设、导入预设、{{}} 变量说明），规范消息角色为纯英文 `system`/`user`/`assistant`，并确保顶级首条固定为启用的系统提示词。
-
 ---
 
 ## 🌟 核心特性
 
-1. **完全符合官方自定义预设规范**
-   - 建立的每一个预设均直接在 `<dshHome>/.agent-presets/<id>/` 写入标准的 `preset.yml` 与 `agent.cordis.yml`。
-   - 无缝呈现在官方设置的【自定义预设】以及聊天界面右上角的【Agent 预设选择器】中。
-2. **纯粹的预设绑定触发（零命令、无感自动注入）**
-   - 彻底移除了任何 `/` 前缀命令。
-   - 只要在新建聊天时选择了对应的自定义预设，系统便会在启动会话与模型流式生成时默认自动注入该预设的提示词与上下文消息。
-   - **精确隔离**：只对自己编辑绑定的自定义预设生效，官方内置预设（standard、minimal、ptc、cordis 等）保持纯净，绝不受任何影响。
-3. **文件夹即预设（全平台唯一真源双向同步）**
-   - 无论在 Windows、macOS、Linux 还是 Docker 容器中，均以物理预设文件夹为唯一真源。
-   - **官方删除实时同步**：在官方设置中删除自定义预设时，由于物理文件夹被移除，本插件页面一键刷新即刻同步消除，绝不残留或回滚复活。
-   - **官方复制自动纳管**：在官方界面通过“复制”新建的预设目录，本插件能自动发现并纳管。
-4. **可视化消息编排与顶级强约束**
-   - 标准采用开发级英文角色字段：`system`、`user`、`assistant`。
-   - **顶级强约束**：预设首条（`#1`）强制固定为启用的 `system` 消息，不可关闭、不可删除、不可移出首位，确保系统提示词基石稳固。
-   - 支持通过 **`↑ 上移`** / **`↓ 下移`** 按钮自由调整消息在上下文中的排列位置与执行顺序。
-   - 每条条目支持独立启用/停用开关、实时内容修改与删除。
-5. **AI 工具自由配备**
-   - 点击【AI 工具】按钮，展示当前预设需要配备的所有工具（涵盖官方所有内置工具：Bash、PowerShell、文件操作、文件检索、替换编辑器、后台任务、网页检索、技能系统、询问用户、Todo 待办、子代理、工作流等）。
-   - 严格遵循官方创作隔离域规则（`isolate: workflowEngine` / `compaction` 等），杜绝跨平面服务注册冲突。
-6. **官方 `{{}}` 模板变量规范与说明**
-   - 界面内置专属的【`{{}}` 变量说明】入口，详细解析官方支持的 3 大模板变量：
-     - `{{model}}`：当前会话所分配的具体大模型名称；
-     - `{{provider}}`：当前模型服务提供商标识；
-     - `{{cwd}}`：当前会话工作区根目录绝对路径；
-   - **安全警示**：模板变量由 DSH 核心装配引擎解析，仅支持在 `system` 中使用；若写入 `user` 或 `assistant` 会导致无法解析或报错。
-7. **清晰规范的三大页面视图**
-   - 顶部醒目大字：**预设编辑**，配以小字介绍：*可视化编辑预设，选择一个预设并保存，新对话即可生效。*
-   - 横向排版三大导航入口：
-     - **当前预设**：卡片式浏览已创建的自定义预设，快捷进行编辑、导出、删除。
-     - **新建预设**：定制新预设，配备工具与消息条目，操作仅有“保存预设”与“取消”。
-     - **导入预设**：点击直接调起文件选择器，一键导入已有的预设 JSON 文件。
-     - **{{}} 变量说明**：弹窗展示官方模板变量规则与使用范例。
-     - **编辑预设**：支持对已存在的预设修改内容、配备工具、支持“保存”、“取消”、“删除预设”与“导出预设”。
+1. **完全符合官方预设体系**
+   - 编辑器里的每个预设都会通过官方 `agentPresets` 服务注册为标准的 Agent 预设声明，直接出现在官方设置的【自定义预设】与聊天界面右上角的【Agent 预设选择器】中。
+2. **零命令、无感生效**
+   - 没有任何 `/` 斜杠命令；在新建会话时选择对应预设即可生效。
+   - **精确隔离**：预设的系统提示词与工具挂载在该预设自己的隔离域内，官方内置预设（standard、minimal、ptc、cordis 等）保持纯净。
+3. **可视化消息编排与顶级强约束**
+   - 标准角色字段：`system`、`user`、`assistant`。
+   - **顶级强约束**：预设首条（`#1`）强制固定为启用的 `system` 消息，不可关闭、不可删除、不可移出首位。
+   - 支持 `↑ 上移` / `↓ 下移` 调整条目顺序，每条支持独立启用/停用、实时修改与删除。
+4. **AI 工具自由配备**
+   - 【AI 工具】按钮按需为当前预设勾选工具插件（Bash、PowerShell、文件操作、文件检索、精准替换编辑器、后台任务、网页检索、技能系统、询问用户、Todo、子代理、工作流、计划模式、上下文压缩、交付物卡片等）。
+   - 生成的插件行与官方 `dsh-web-app` 的 `standard` 预设同构，含官方要求的 `isolate` 隔离域（`planMode` / `compaction` / `toolResultPruner` / `workflowEngine`）。
+5. **官方 `{{}}` 模板变量**
+   - 界面内置【`{{}}` 变量说明】入口：`{{model}}`、`{{provider}}`、`{{cwd}}`。
+   - 模板变量由 DSH 核心装配引擎解析，仅支持在 `system` 中使用。
+6. **导入 / 导出**
+   - 单个预设或全部预设导出为 JSON，一键导入，便于备份与跨机器迁移。
 
 ---
 
-## 🤖 让 AI 帮您一键安装（Copilot 提示词）
+## 🧩 0.2 适配说明（相对 0.1.x 的改动）
 
-如果您使用的是支持代码辅助的 AI Agent（如 Claude Code、小鲸鱼-Pi、Cursor 等），可以直接复制以下提示词给 AI：
+DSH 0.2 移除了 0.1.x 的「目录即预设」模型，旧实现整体失效，本版本已重写宿主侧：
 
-```text
-请帮我把 https://github.com/Td0000000/dsh-preset-editor 克隆到本地 plugins/dsh-preset-editor 目录，并将其作为 link 插件添加到当前 DSH 的 web profile 中：
-1. git clone https://github.com/Td0000000/dsh-preset-editor.git plugins/dsh-preset-editor
-2. ./dshw plugin --profile web add link:./plugins/dsh-preset-editor
-3. 检查并重启 DSH Web 服务
-```
+| 项目 | 0.1.x 旧实现 | 0.2 适配实现 |
+|---|---|---|
+| 预设存储 | 写入 `$DSH_HOME/.agent-presets/<id>/`（`preset.yml` + `agent.cordis.yml`），靠官方扫描目录 | **官方已不再读取该目录**。改为本插件自有存储 `$DSH_HOME/preset-editor.json` 作为唯一真源；首次运行会把遗留目录里的 `preset.editor.json` 一次性迁移进来 |
+| 预设生效 | 目录被官方扫描后出现在名册 | 通过官方 `ctx.agentPresets.register({ id, name, description, order, plugins })` 注册；`plugins` 即该预设的隔离插件树，官方名册与选择器直接可见 |
+| system 提示词 | `systemPrompt.section()` + 事件里读 `context.agent`（0.2 的 `AssembleContext` 已无 `agent` 字段，旧写法永远返回空串） | 生成为该预设自身 `@deepseek-ai/dsh-persona` 的 `prefix`，天然只在预设隔离域内生效，支持 `{{}}` 变量 |
+| 工具行 | 拼接 YAML 文本，引用了 0.2 已不存在的 `@deepseek-ai/dsh-workflow-worker-thread` | 直接生成对象行，改用 `@deepseek-ai/dsh-workflow-ptc`，并与官方 `standard` 预设的行/配置对齐 |
+| user 消息注入 | `llm/stream` 里改写整份请求消息数组 | 会话首个 turn 通过官方 `agent/pre-step` 瀑布播种为真实 user 消息（因此会入会话日志，符合官方「模型可见 ⟺ 已入日志」约束） |
+| assistant 消息注入 | 同左 | 保留 `llm/stream` 前置注入（0.2 没有受支持的「伪造 assistant 历史」入口），每个会话只注入一次 |
+| 引擎声明 | `engines.dsh: ">=0.1.5-rc.1 <0.2.0"` | `engines.dsh: ">=0.2.0-rc.1 <0.3.0"` |
+| 客户端清单 | `dsh.client.inject` 缺少 `@deepseek-ai/dsh-client-ui-slots`，没有 `immediately` | 补齐 `@deepseek-ai/dsh-client-ui-slots` 并设置 `immediately: true`。注意这两项只是**模块到达顺序 / 启动预取提示**，并不决定设置页是否注册——注册走的是 `ctx.slots.inject("settings.section", …)` |
+| 客户端主题令牌 | `--dsw-alias-bg-layer-4`、`--dsw-alias-state-warning-primary`（0.2 已不存在/改名） | 改为 `--dsw-alias-bg-overlay`、`--dsw-alias-state-warn-primary`；并删除未使用的 `--dsw-alias-brand-hover` |
+| **按钮填充色（白底白字 bug）** | 用 `--dsw-alias-brand-primary` 当**填充色**再配硬编码白字 | `--dsw-alias-brand-primary` 是「反色前景色」（浅色主题近黑、深色主题近白），只能用于文字/描边。填充改为官方的 `--dsw-alias-button-primary-fill` + `--dsw-alias-label-primary-inverted` 配对。修复前深色主题对比度仅 **1.05:1**（白底白字），修复后 **11.57:1** |
+| 客户端代码 | `client.js` 的加载器格式、React 取用、slot 注册在 0.2 未变 | **结构性代码无需改动**（仅修了上面 2 个主题令牌名） |
+
+### 已知限制
+
+- `assistant` 条目是「请求可见但不入会话日志」的引导消息（官方 0.2 未提供伪造 assistant 历史的正规入口），因此它不会出现在对话记录里。
+- `user` 条目在会话首个 turn 播种进日志，会作为一条 user 消息出现在该会话开头。
+- 预设注册在插件启用期间有效；禁用本插件后，它注册的预设会一并消失。
 
 ---
 
-## 📦 手动安装方式
-
-在已配置好 DSH 环境的终端中运行：
+## 📦 安装
 
 ```bash
-# 1. 克隆本仓库到 plugins 目录
-git clone https://github.com/Td0000000/dsh-preset-editor.git plugins/dsh-preset-editor
-
-# 2. 将插件以 link 方式装载至当前 profile
-dsh plugin --profile web add link:./plugins/dsh-preset-editor
-
-# 3. 重启 DSH Web 服务
-./dshw start
+# 1. 克隆到插件目录
+git clone https://github.com/Td0000000/dsh-preset-editor.git ~/.dsh/plugins/dsh-preset-editor
 ```
 
-打开设置页面，在左侧导航栏点击【预设编辑】，即可开始管理与创建自定义预设。
+然后在 DSH 里安装该 bundle（二选一）：
+
+- **推荐**：用 DSH 的 `plugin_manager` 以 `install_bundle` 安装，`target` 传该目录的绝对路径；
+- 或在「设置 → 插件」中把该目录作为本地插件安装。
+
+安装完成后：
+
+- 设置页左侧出现【预设编辑】入口；
+- 在【新建预设】里填写系统提示词、消息条目并勾选工具，保存后新开对话，在右上角预设选择器中选择该预设即可生效。
+
+---
+
+## 🗂 数据位置
+
+- 预设存储：`$DSH_HOME/preset-editor.json`（`$DSH_HOME` 默认 `~/.dsh`）
+- 旧版遗留目录（仅一次性迁移，之后不再使用）：`$DSH_HOME/.agent-presets/`
 
 ---
 
 ## 兼容性说明
 
-- **框架版本**：DeepSeek Harness 官方版本 `0.1.x`（包括 `0.1.2-rc.1` 及以上主干版本）。
+- **框架版本**：DeepSeek Harness `0.2.0-rc.1` ~ `0.2.x`（Desktop / Web profile）。
 - **微内核**：基于 `@deepseek-ai/cordis` `^4.0.1`。
-- **环境要求**：Node.js >= 18.0.0。
+- **环境要求**：Node.js >= 20。
 
 ---
 
