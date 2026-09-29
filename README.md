@@ -46,18 +46,42 @@ DSH 0.2 移除了 0.1.x 的「目录即预设」模型，旧实现整体失效�
 | 预设生效 | 目录被官方扫描后出现在名册 | 通过官方 `ctx.agentPresets.register({ id, name, description, order, plugins })` 注册；`plugins` 即该预设的隔离插件树，官方名册与选择器直接可见 |
 | system 提示词 | `systemPrompt.section()` + 事件里读 `context.agent`（0.2 的 `AssembleContext` 已无 `agent` 字段，旧写法永远返回空串） | 生成为该预设自身 `@deepseek-ai/dsh-persona` 的 `prefix`，天然只在预设隔离域内生效，支持 `{{}}` 变量 |
 | 工具行 | 拼接 YAML 文本，引用了 0.2 已不存在的 `@deepseek-ai/dsh-workflow-worker-thread` | 直接生成对象行，改用 `@deepseek-ai/dsh-workflow-ptc`，并与官方 `standard` 预设的行/配置对齐 |
-| user 消息注入 | `llm/stream` 里改写整份请求消息数组 | 会话首个 turn 通过官方 `agent/pre-step` 瀑布播种为真实 user 消息（因此会入会话日志，符合官方「模型可见 ⟺ 已入日志」约束） |
-| assistant 消息注入 | 同左 | 保留 `llm/stream` 前置注入（0.2 没有受支持的「伪造 assistant 历史」入口），每个会话只注入一次 |
+| user 消息注入 | `llm/stream` 里改写整份请求消息数组 | 恢复为**每次**主模型调用前置注入（与 0.1.x 原版一致），见下方「为什么必须每次注入」 |
+| assistant 消息注入 | 同左 | 同上，每次调用都注入 |
+| **抗上下文压缩** | — | user/assistant 条目**不进会话日志**，走请求级注入，因此不会被 compaction 摘要掉；system 条目走 persona → 系统提示词，官方明确「压缩绝不缩减系统提示词」 |
 | 引擎声明 | `engines.dsh: ">=0.1.5-rc.1 <0.2.0"` | `engines.dsh: ">=0.2.0-rc.1 <0.3.0"` |
 | 客户端清单 | `dsh.client.inject` 缺少 `@deepseek-ai/dsh-client-ui-slots`，没有 `immediately` | 补齐 `@deepseek-ai/dsh-client-ui-slots` 并设置 `immediately: true`。注意这两项只是**模块到达顺序 / 启动预取提示**，并不决定设置页是否注册——注册走的是 `ctx.slots.inject("settings.section", …)` |
 | 客户端主题令牌 | `--dsw-alias-bg-layer-4`、`--dsw-alias-state-warning-primary`（0.2 已不存在/改名） | 改为 `--dsw-alias-bg-overlay`、`--dsw-alias-state-warn-primary`；并删除未使用的 `--dsw-alias-brand-hover` |
 | **按钮填充色（白底白字 bug）** | 用 `--dsw-alias-brand-primary` 当**填充色**再配硬编码白字 | `--dsw-alias-brand-primary` 是「反色前景色」（浅色主题近黑、深色主题近白），只能用于文字/描边。填充改为官方的 `--dsw-alias-button-primary-fill` + `--dsw-alias-label-primary-inverted` 配对。修复前深色主题对比度仅 **1.05:1**（白底白字），修复后 **11.57:1** |
 | 客户端代码 | `client.js` 的加载器格式、React 取用、slot 注册在 0.2 未变 | **结构性代码无需改动**（仅修了上面 2 个主题令牌名） |
 
+### 为什么必须每次注入（抗压缩）
+
+DSH 的压缩（`@deepseek-ai/dsh-compaction-basic`）在 token 压力越过阈值时，
+会把**最旧的一段表层历史**替换成一条带 `<compacted-summary>` 的 user 消息，
+只逐字保留近期约 16% 的历史（`retainRatio: 0.16`）。
+
+推论：
+
+- 凡是**进入会话日志**的内容，早晚都会被压缩掉；
+- 官方文档明确：**压缩绝不缩减系统提示词、工具或会话前缀**。
+
+所以三种条目的抗压缩能力天然不同：
+
+| 条目 | 去向 | 会不会被压缩掉 |
+|---|---|---|
+| `system` | persona → 系统提示词（表层节点 0） | ❌ 不会（官方保证） |
+| `user` | 请求级注入，每次调用都在场 | ❌ 不会 |
+| `assistant` | 请求级注入，每次调用都在场 | ❌ 不会 |
+
+> 早期实现曾把 `user` 条目通过 `agent/pre-step` 播种进会话日志、`assistant` 条目只注入一次。
+> 实测（`work/compare-injection.mjs`）显示：压缩发生后两者都会消失，因为日志里的注入消息正是「最旧的历史」，
+> 而只注入一次的 assistant 消息从第二轮起就不在任何地方了。现已改回每次注入。
+
 ### 已知限制
 
-- `assistant` 条目是「请求可见但不入会话日志」的引导消息（官方 0.2 未提供伪造 assistant 历史的正规入口），因此它不会出现在对话记录里。
-- `user` 条目在会话首个 turn 播种进日志，会作为一条 user 消息出现在该会话开头。
+- `user` / `assistant` 条目是**请求可见但不入会话日志**的引导消息，因此不会出现在对话记录里。
+  这是为了抗压缩而做的取舍：要让它们既入日志又不被压缩，DSH 当前没有受支持的入口。
 - 预设注册在插件启用期间有效；禁用本插件后，它注册的预设会一并消失。
 
 ---
