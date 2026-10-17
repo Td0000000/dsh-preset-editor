@@ -1,17 +1,21 @@
 {
   "name": "dsh-preset-editor",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "DeepSeek Harness visual preset editor: custom agent presets with SYS/USER/ASSISTANT message orchestration, AI tools equipment, and automatic context injection.",
   "type": "module",
   "main": "lib/index.js",
+  "icon": "./icon.svg",
   "exports": {
     ".": "./lib/index.js",
     "./client": "./client.js",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./locale/*.json": "./locale/*.json"
   },
   "files": [
     "lib",
     "client.js",
+    "locale",
+    "icon.svg",
     "cordis.patch.yml",
     "README.md",
     "LICENSE"
@@ -30,6 +34,7 @@
     "agent"
   ],
   "dsh": {
+    "manifestVersion": 1,
     "bundle": {
       "patch": "./cordis.patch.yml"
     },

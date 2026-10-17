@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" width="64" height="64" role="img" aria-label="Preset Editor">
+  <defs>
+    <linearGradient id="g" x1="10" y1="6" x2="54" y2="60" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#4f7cff"/>
+      <stop offset="1" stop-color="#8a5cff"/>
+    </linearGradient>
+  </defs>
+  <rect x="4" y="4" width="56" height="56" rx="14" fill="url(#g)"/>
+  <circle cx="18" cy="21" r="3.5" fill="#ffffff"/>
+  <rect x="26" y="18.5" width="22" height="5" rx="2.5" fill="#ffffff"/>
+  <circle cx="18" cy="32" r="3.5" fill="#ffffff" opacity=".85"/>
+  <rect x="26" y="29.5" width="16" height="5" rx="2.5" fill="#ffffff" opacity=".85"/>
+  <circle cx="18" cy="43" r="3.5" fill="#ffffff" opacity=".7"/>
+  <rect x="26" y="40.5" width="20" height="5" rx="2.5" fill="#ffffff" opacity=".7"/>
+</svg>

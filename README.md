@@ -4,7 +4,7 @@ DeepSeek Harness 自定义预设可视化编辑插件。
 
 支持对自定义 Agent 预设进行可视化创建、编辑、管理与导入导出，支持 `system`、`user`、`assistant` 消息编排，支持自主配备 AI 工具，直接融入官方 Agent 预设体系，新会话一键选择即可生效。
 
-> **本版本已适配 DSH `0.2.0-rc.x`**（见下方「0.2 适配说明」）。
+> **本版本（v1.2.0）已适配 DSH `0.2.1-rc.2`**（见下方「0.2 适配说明」与「0.2.1 适配说明」）。
 
 ---
 
@@ -54,6 +54,17 @@ DSH 0.2 移除了 0.1.x 的「目录即预设」模型，旧实现整体失效�
 | 客户端主题令牌 | `--dsw-alias-bg-layer-4`、`--dsw-alias-state-warning-primary`（0.2 已不存在/改名） | 改为 `--dsw-alias-bg-overlay`、`--dsw-alias-state-warn-primary`；并删除未使用的 `--dsw-alias-brand-hover` |
 | **按钮填充色（白底白字 bug）** | 用 `--dsw-alias-brand-primary` 当**填充色**再配硬编码白字 | `--dsw-alias-brand-primary` 是「反色前景色」（浅色主题近黑、深色主题近白），只能用于文字/描边。填充改为官方的 `--dsw-alias-button-primary-fill` + `--dsw-alias-label-primary-inverted` 配对。修复前深色主题对比度仅 **1.05:1**（白底白字），修复后 **11.57:1** |
 | 客户端代码 | `client.js` 的加载器格式、React 取用、slot 注册在 0.2 未变 | **结构性代码无需改动**（仅修了上面 2 个主题令牌名） |
+
+### 0.2.1 适配说明（v1.2.0）
+
+针对 DSH `0.2.1-rc.2` 的官方包逐项核对后，改动如下：
+
+| 问题 | 0.2.1 官方事实 | 本版本处理 |
+|---|---|---|
+| `tool-subagent` 的 `backgroundMode: "continuable"` | 0.2.1 的 `@deepseek-ai/dsh-tool-subagent` 已删除该 Config 项（只接受 `provider` / `toolName` / `modelSelectionSettings` / `agentOptions` / `agentPreset` / `allowedAgentPresets` / `maxDepth`）。0.2.1 的每次委派本身就是「启动子代理后立即返回 `started subagent <childId>` + 完成通知」，本地 spawn/fork 子代理还可在运行中 `send_message`、结束后恢复。schemastery 非 strict，旧键会被**静默忽略**，看起来没报错但语义靠运气 | 删除 `backgroundMode` 键，其余合法键保留；后台/续聊语义由 0.2.1 运行时内建保证，不再需要声明 |
+| 空 `system` 条目生成 `persona: {}` | 0.2.1 的 `@deepseek-ai/dsh-persona` 中 `prefix` 是必填的非空字符串；生成 `config: {}` 会让 Loader 校验失败，整个预设变成 broken | `system` 文本为空时**不插入 persona 行**（预设沿用部署默认人格），非空时仍生成 `{ prefix: systemText }` |
+| 插件显示元数据 | 0.2.1 不读 `dsh.plugin.json`；改为从包的 `package.json.icon`（包内相对路径，SVG/PNG/JPEG/WebP，≤256 KiB）与 `./locale/*.json` 的 `meta.title` / `meta.description` 读取，并经 module resolver 解析 | 新增包根 `icon.svg`、`locale/en.json`（英文回退）、`locale/zh.json`；`package.json` 补根字段 `"icon": "./icon.svg"`、`dsh.manifestVersion: 1`、`exports["./locale/*.json"]`，`files` 补 `locale` / `icon.svg` |
+| 版本 | — | `1.1.0` → `1.2.0` |
 
 ### 为什么必须每次注入（抗压缩）
 
@@ -114,7 +125,7 @@ git clone https://github.com/Td0000000/dsh-preset-editor.git ~/.dsh/plugins/dsh-
 
 ## 兼容性说明
 
-- **框架版本**：DeepSeek Harness `0.2.0-rc.1` ~ `0.2.x`（Desktop / Web profile）。
+- **框架版本**：DeepSeek Harness `0.2.1-rc.2`（`0.2.x` 系列；`engines.dsh: ">=0.2.0-rc.1 <0.3.0"`）。
 - **微内核**：基于 `@deepseek-ai/cordis` `^4.0.1`。
 - **环境要求**：Node.js >= 20。
 
