@@ -264,6 +264,7 @@ window.__ModuleLoader__.load({
       const [view, setView] = useState("current");
       const [doc, setDoc] = useState(null);
       const [allTools, setAllTools] = useState([]);
+      const [hostProvided, setHostProvided] = useState([]);
       const [notice, setNotice] = useState({ kind: "idle", text: "" });
       const [busy, setBusy] = useState(false);
 
@@ -298,6 +299,7 @@ window.__ModuleLoader__.load({
           .then((d) => {
             if (d.ok) {
               setAllTools(d.tools || []);
+              setHostProvided(d.hostProvided || []);
             }
           })
           .catch(() => {});
@@ -323,7 +325,7 @@ window.__ModuleLoader__.load({
           id: "",
           name: "",
           description: "",
-          enabledTools: defaultToolIds.length > 0 ? defaultToolIds : ["tool-bash", "tool-pwsh", "tool-fs", "tool-fs-search", "tool-web", "tool-skill", "tool-ask-user", "tool-todo"],
+          enabledTools: defaultToolIds.length > 0 ? defaultToolIds : ["time-context", "tool-bash", "tool-pwsh", "tool-fs", "tool-fs-search", "tool-jobs", "tool-web", "tool-skill", "tool-ask-user", "tool-todo", "tool-present", "tool-goal", "plan-mode", "tool-subagent", "tool-schedule", "compaction"],
           // 顶级第一条必须是 system 且为启用状态
           entries: [
             { id: "e-1", role: "system", text: "", enabled: true },
@@ -378,6 +380,27 @@ window.__ModuleLoader__.load({
         }
         if (draft.entries[0].role !== "system" || draft.entries[0].enabled !== true) {
           setNotice({ kind: "error", text: "顶级第一条必须是 system 且必须处于启用状态！" });
+          return;
+        }
+
+        // 模板变量校验：只有 system 会走 DSH 的 persona 插值，只支持 model / provider。
+        const badVars = new Set();
+        for (const entry of draft.entries) {
+          if (entry.role !== "system" || entry.enabled === false) continue;
+          const re = /\{\{([^{}]*)\}\}/g;
+          let match;
+          while ((match = re.exec(String(entry.text || "")))) {
+            const raw = match[1];
+            if (!/^[a-z][a-z0-9_]*$/.test(raw) || (raw !== "model" && raw !== "provider")) {
+              badVars.add(match[0]);
+            }
+          }
+        }
+        if (badVars.size > 0) {
+          setNotice({
+            kind: "error",
+            text: `system 提示词里有不支持的模板变量 ${[...badVars].join("、")}。只支持 {{model}}、{{provider}}；工作目录、时间等由系统自动注入。`,
+          });
           return;
         }
 
@@ -574,7 +597,7 @@ window.__ModuleLoader__.load({
             h("button", {
               style: S.navButton(showVariablesModal),
               onClick: () => setShowVariablesModal(true),
-            }, "{{}} 变量说明"),
+            }, "预设说明"),
             // 状态提示
             notice.kind === "ok" ? h("span", {
               style: {
@@ -717,9 +740,41 @@ window.__ModuleLoader__.load({
         );
       };
 
-      // 渲染官方 {{}} 变量说明弹窗
+      // 渲染「预设说明」弹窗：预设规则 + 当前可用变量 + 官方提示词注入规则（简版）
       const renderVariablesModal = () => {
         if (!showVariablesModal) return null;
+
+        const variableCard = (code, label, desc) =>
+          h("div", {
+            style: {
+              padding: "12px 14px",
+              borderRadius: "8px",
+              border: "1px solid " + THEME.border,
+              background: THEME.panel,
+            },
+          },
+            h("div", { style: { display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" } },
+              h("code", { style: { color: THEME.accent, fontWeight: 700, fontSize: "13px" } }, code),
+              h("span", { style: S.badge("rgba(59, 130, 246, 0.12)", THEME.accent) }, label),
+            ),
+            h("div", { style: { fontSize: "12px", color: THEME.muted, lineHeight: 1.6 } }, desc),
+          );
+
+        const ruleCard = (title, lines, accentColor) =>
+          h("div", {
+            style: {
+              padding: "12px 14px",
+              borderRadius: "8px",
+              border: "1px solid " + THEME.border,
+              background: THEME.panel,
+              borderLeft: "3px solid " + accentColor,
+            },
+          },
+            h("div", { style: { fontSize: "13px", fontWeight: 700, color: THEME.ink, marginBottom: "4px" } }, title),
+            lines.map((line, i) =>
+              h("div", { key: i, style: { fontSize: "12px", color: THEME.muted, lineHeight: 1.65 } }, line),
+            ),
+          );
 
         return h("div", {
           style: S.modalOverlay,
@@ -739,7 +794,7 @@ window.__ModuleLoader__.load({
                 alignItems: "center",
               },
             },
-              h("h3", { style: { margin: 0, fontSize: "16px", fontWeight: 650 } }, "官方 {{}} 模板变量说明"),
+              h("h3", { style: { margin: 0, fontSize: "16px", fontWeight: 650 } }, "预设说明（变量与提示词注入）"),
               h("button", {
                 style: Object.assign({}, S.btnSecondary, { padding: "4px 10px", fontSize: "12px" }),
                 onClick: () => setShowVariablesModal(false),
@@ -752,75 +807,42 @@ window.__ModuleLoader__.load({
                 overflowY: "auto",
                 display: "flex",
                 flexDirection: "column",
-                gap: "16px",
+                gap: "12px",
               },
             },
               // 顶端核心警示
               h("div", { style: S.warningBanner },
                 h("span", { style: { fontSize: "18px", flexShrink: 0 } }, "⚠️"),
                 h("div", null,
-                  h("strong", null, "特别注意："),
-                  " 官方准备好的 {{}} 模板变量由 DSH 核心系统提示词引擎在组装时动态渲染，",
-                  h("strong", { style: { textDecoration: "underline" } }, "仅支持在 system 消息中使用"),
-                  "！如果写到除 system 之外的 user 或 assistant 消息中，将无法被系统解析或导致报错！",
+                  h("strong", null, "严格解析："),
+                  " system 里的 {{...}} 由 DSH 核心在每次请求前解析。写错变量名、写了不支持的变量（例如 {{cwd}}），都会让整个预设报错、会话不可用。保存时本插件会先校验。",
                 ),
               ),
 
-              h("div", { style: { fontSize: "13px", color: THEME.ink, lineHeight: 1.6 } },
-                "在 system 提示词中，您可以直接书写以下变量占位符，运行时 DSH 会自动将其替换为当前会话的真实环境参数：",
-              ),
+              ruleCard("预设是什么", [
+                "预设 = 这个会话专属的“插件套餐”：system 变成角色设定，user/assistant 是每轮注入的引导，勾选的工具决定 AI 能做什么。",
+                "保存后会注册成官方 Agent 自定义预设，出现在官方设置页和聊天右上角的预设选择器中；system 为空则沿用部署默认人格。",
+              ], THEME.roleSys),
 
-              // 变量列表表格/卡片
+              ruleCard("三种条目怎么生效", [
+                "system：作为该预设的 persona 系统提示词，替换部署默认人格；不会被上下文压缩。",
+                "user：每轮请求前注入的引导消息；不进对话记录，也不会被压缩。",
+                "assistant：每轮请求前注入的“AI 已说过的话”；同样不进对话记录。",
+              ], THEME.roleUser),
+
+              h("div", { style: { fontSize: "13px", fontWeight: 700, color: THEME.ink, marginTop: "2px" } },
+                "system 里目前可以用的 {{}} 变量（只有两个）"),
               h("div", { style: { display: "flex", flexDirection: "column", gap: "10px" } },
-                h("div", {
-                  style: {
-                    padding: "12px 14px",
-                    borderRadius: "8px",
-                    border: "1px solid " + THEME.border,
-                    background: THEME.panel,
-                  },
-                },
-                  h("div", { style: { display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" } },
-                    h("code", { style: { color: THEME.accent, fontWeight: 700, fontSize: "13px" } }, "{{model}}"),
-                    h("span", { style: S.badge("rgba(59, 130, 246, 0.12)", THEME.accent) }, "模型型号"),
-                  ),
-                  h("div", { style: { fontSize: "12px", color: THEME.muted } },
-                    "解析为当前会话所选用的具体大模型型号（例如 deepseek-chat、deepseek-reasoner 等）。",
-                  ),
-                ),
-                h("div", {
-                  style: {
-                    padding: "12px 14px",
-                    borderRadius: "8px",
-                    border: "1px solid " + THEME.border,
-                    background: THEME.panel,
-                  },
-                },
-                  h("div", { style: { display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" } },
-                    h("code", { style: { color: THEME.accent, fontWeight: 700, fontSize: "13px" } }, "{{provider}}"),
-                    h("span", { style: S.badge("rgba(139, 92, 246, 0.12)", THEME.roleAssistant) }, "服务商/适配器"),
-                  ),
-                  h("div", { style: { fontSize: "12px", color: THEME.muted } },
-                    "解析为当前模型服务提供商标识（例如 deepseek-official、openai、ollama 等）。",
-                  ),
-                ),
-                h("div", {
-                  style: {
-                    padding: "12px 14px",
-                    borderRadius: "8px",
-                    border: "1px solid " + THEME.border,
-                    background: THEME.panel,
-                  },
-                },
-                  h("div", { style: { display: "flex", alignItems: "center", gap: "8px", marginBottom: "4px" } },
-                    h("code", { style: { color: THEME.accent, fontWeight: 700, fontSize: "13px" } }, "{{cwd}}"),
-                    h("span", { style: S.badge("rgba(16, 185, 129, 0.12)", THEME.roleUser) }, "工作区路径"),
-                  ),
-                  h("div", { style: { fontSize: "12px", color: THEME.muted } },
-                    "解析为当前会话所绑定的本地工作区根目录绝对路径（Working Directory）。",
-                  ),
-                ),
+                variableCard("{{model}}", "模型型号", "当前会话实际使用的模型名，例如 deepseek-flash。"),
+                variableCard("{{provider}}", "服务商 / 适配器", "当前模型的服务商标识，例如 deepseek-account、bendi-api。"),
               ),
+
+              ruleCard("官方提示词注入规则（简版）", [
+                "1. 系统提示词、persona、工具说明不会被上下文压缩。",
+                "2. 工作目录、当前时间、沙箱 / 审批策略、Harness 路径、GUI 地址等是“运行时上下文”，由系统自动注入并维护，不需要写变量。",
+                "3. user / assistant 条目是请求级注入：不进日志，所以不会被压缩，也不会出现在对话记录里。",
+                "4. AGENTS.md 与技能目录按需注入，不走 system 提示词。",
+              ], THEME.warning),
 
               h("div", {
                 style: {
@@ -830,12 +852,15 @@ window.__ModuleLoader__.load({
                   border: "1px dashed " + THEME.border,
                   fontSize: "12px",
                   color: THEME.dim,
-                  lineHeight: 1.5,
+                  lineHeight: 1.6,
                 },
               },
-                "示例（仅写在 system 提示词中）：",
-                h("div", { style: { fontFamily: "monospace", color: THEME.ink, marginTop: "6px" } },
-                  "你是一个运行在 {{provider}} 平台、由 {{model}} 模型驱动的专业编程助手。当前工作区位于 {{cwd}}，请协助用户分析和解决代码问题。",
+                "示例（只写在 system 里）：",
+                h("div", { style: { fontFamily: "monospace", color: THEME.ink, marginTop: "6px", whiteSpace: "pre-wrap" } },
+                  "你是一个运行在 {{provider}} 平台、由 {{model}} 模型驱动的专业编程助手。请协助用户分析和解决代码问题。",
+                ),
+                h("div", { style: { marginTop: "6px" } },
+                  "注意：当前工作目录、时间等信息由系统自动告诉模型，不需要也不支持 {{cwd}}。",
                 ),
               ),
             ),
@@ -889,7 +914,7 @@ window.__ModuleLoader__.load({
             },
               h("div", null,
                 h("h3", { style: { margin: 0, fontSize: "16px", fontWeight: 650 } }, "AI 工具配备"),
-                h("p", { style: { margin: "4px 0 0", fontSize: "12px", color: THEME.muted } }, "选择该预设会话在启动时所配备的工具插件（包含官方全套工具与隔离组）"),
+                h("p", { style: { margin: "4px 0 0", fontSize: "12px", color: THEME.muted } }, "选择该预设会话要挂载的官方工具插件；名称与说明优先使用官方中文文案。"),
               ),
               h("button", {
                 style: Object.assign({}, S.btnSecondary, { padding: "4px 10px", fontSize: "12px" }),
@@ -951,6 +976,24 @@ window.__ModuleLoader__.load({
                   ),
                 );
               }),
+              // 宿主级工具说明（不可勾选）
+              hostProvided.length > 0 ? h("div", {
+                style: {
+                  padding: "10px 12px",
+                  borderRadius: "8px",
+                  border: "1px dashed " + THEME.border,
+                  background: "rgba(255,255,255,.02)",
+                  fontSize: "11.5px",
+                  color: THEME.muted,
+                  lineHeight: 1.6,
+                },
+              },
+                h("div", { style: { fontWeight: 700, color: THEME.ink, marginBottom: "4px" } }, "宿主级工具（已屏蔽，不能放进预设）"),
+                h("div", null, hostProvided.map((t) => t.name).join("、")),
+                h("div", { style: { marginTop: "4px" } },
+                  "它们由 DSH 宿主或其它插件直接提供；在预设里重复挂载会导致重复注册或服务缺失。另外每个预设都会自动包含「工作区指令（AGENTS.md）」。",
+                ),
+              ) : null,
             ),
             // 弹窗底部
             h("div", {
@@ -979,14 +1022,12 @@ window.__ModuleLoader__.load({
         const pageTitle = isCreate ? "新建预设" : `编辑预设 - ${draft.name || draft.id}`;
 
         return h("div", { style: { display: "flex", flexDirection: "column", gap: "18px" } },
-          // 页面顶端变量规则警示横幅
+          // 页面顶端模板变量规则警示横幅
           h("div", { style: S.warningBanner },
             h("span", { style: { fontSize: "16px", flexShrink: 0 } }, "⚠️"),
             h("div", null,
-              h("strong", null, "模板变量规则提示："),
-              " 官方准备好的 {{model}}、{{cwd}} 等 {{}} 变量仅支持写在 ",
-              h("strong", { style: { textDecoration: "underline" } }, "system"),
-              " 消息中；若写到除了 system 外的 user 或 assistant 消息中会导致报错！",
+              h("strong", null, "模板变量规则："),
+              " system 里只支持 {{model}}、{{provider}} 两个变量；写其他 {{...}}（例如 {{cwd}}）会让整个预设报错。工作目录、时间、沙箱等信息由 DSH 自动注入，不需要写变量。",
             ),
           ),
 
@@ -1185,7 +1226,7 @@ window.__ModuleLoader__.load({
                   style: S.textarea,
                   value: entry.text,
                   placeholder: entry.role === "system"
-                    ? "输入 system 系统提示词（支持官方 {{model}}、{{cwd}} 变量）..."
+                    ? "输入 system 系统提示词（支持 {{model}}、{{provider}} 变量；工作目录等由系统自动注入）..."
                     : entry.role === "user"
                     ? "输入 user 消息..."
                     : "输入 assistant 消息...",

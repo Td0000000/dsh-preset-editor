@@ -4,7 +4,7 @@ DeepSeek Harness 自定义预设可视化编辑插件。
 
 支持对自定义 Agent 预设进行可视化创建、编辑、管理与导入导出，支持 `system`、`user`、`assistant` 消息编排，支持自主配备 AI 工具，直接融入官方 Agent 预设体系，新会话一键选择即可生效。
 
-> **本版本（v1.2.0）已适配 DSH `0.2.1-rc.2`**（见下方「0.2 适配说明」与「0.2.1 适配说明」）。
+> **本版本（v1.3.0）已适配 DSH `0.2.1-rc.2`**（见下方「0.2 适配说明」「0.2.1 适配说明」「1.3.0 变更」）。
 
 ---
 
@@ -25,12 +25,17 @@ DeepSeek Harness 自定义预设可视化编辑插件。
    - 标准角色字段：`system`、`user`、`assistant`。
    - **顶级强约束**：预设首条（`#1`）强制固定为启用的 `system` 消息，不可关闭、不可删除、不可移出首位。
    - 支持 `↑ 上移` / `↓ 下移` 调整条目顺序，每条支持独立启用/停用、实时修改与删除。
-4. **AI 工具自由配备**
-   - 【AI 工具】按钮按需为当前预设勾选工具插件（Bash、PowerShell、文件操作、文件检索、精准替换编辑器、后台任务、网页检索、技能系统、询问用户、Todo、子代理、工作流、计划模式、上下文压缩、交付物卡片等）。
+4. **AI 工具自由配备（官方中文优先）**
+   - 【AI 工具】按钮按需为当前预设勾选工具插件。
+   - 名称与说明优先取自官方包自带的中文文案（`locale/zh.json` 的 `meta.title` / `meta.description`），官方没有中文的（定时提醒、精准文本替换）才由本插件补译。
+   - 默认工具集与官方 `standard` 预设对齐，并补上官方有、本插件之前缺的：`time-context`（时间感知）、`tool-schedule`（定时提醒）、goal、plan-mode、subagent/workflow。
    - 生成的插件行与官方 `dsh-web-app` 的 `standard` 预设同构，含官方要求的 `isolate` 隔离域（`planMode` / `compaction` / `toolResultPruner` / `workflowEngine`）。
-5. **官方 `{{}}` 模板变量**
-   - 界面内置【`{{}}` 变量说明】入口：`{{model}}`、`{{provider}}`、`{{cwd}}`。
-   - 模板变量由 DSH 核心装配引擎解析，仅支持在 `system` 中使用。
+   - **宿主级工具已屏蔽**：`pwd/cd`、会话检索、Ralph、团队工具、工作树、IM 文件发送、插件管理面等由 DSH 宿主或其它插件进程级/按 agent 提供，不能再挂进预设（重复挂载会重复注册或服务缺失，导致预设 broken）。这些只在弹窗里做说明，不生成插件行。
+5. **官方模板变量（已校正）**
+   - 界面内置【预设说明】入口（原「变量说明」），同时解释预设、三种条目与官方提示词注入规则。
+   - DSH `0.2.1-rc.2` 实际只注册 **`{{model}}`、`{{provider}}`** 两个模板变量，仅 `system` 条目会插值。
+   - **`{{cwd}}` 已过时**：工作目录现在由 `dsh-working-directory` 作为“运行时上下文”自动注入，不是模板变量。写 `{{cwd}}` 会让整个预设组装失败。
+   - 保存 / 导入时会自动校验模板变量：只放行 `model` / `provider`，其余 `{{...}}` 直接报错拦截。
 6. **导入 / 导出**
    - 单个预设或全部预设导出为 JSON，一键导入，便于备份与跨机器迁移。
 
@@ -44,10 +49,9 @@ DSH 0.2 移除了 0.1.x 的「目录即预设」模型，旧实现整体失效�
 |---|---|---|
 | 预设存储 | 写入 `$DSH_HOME/.agent-presets/<id>/`（`preset.yml` + `agent.cordis.yml`），靠官方扫描目录 | **官方已不再读取该目录**。改为本插件自有存储 `$DSH_HOME/preset-editor.json` 作为唯一真源；首次运行会把遗留目录里的 `preset.editor.json` 一次性迁移进来 |
 | 预设生效 | 目录被官方扫描后出现在名册 | 通过官方 `ctx.agentPresets.register({ id, name, description, order, plugins })` 注册；`plugins` 即该预设的隔离插件树，官方名册与选择器直接可见 |
-| system 提示词 | `systemPrompt.section()` + 事件里读 `context.agent`（0.2 的 `AssembleContext` 已无 `agent` 字段，旧写法永远返回空串） | 生成为该预设自身 `@deepseek-ai/dsh-persona` 的 `prefix`，天然只在预设隔离域内生效，支持 `{{}}` 变量 |
+| system 提示词 | `systemPrompt.section()` + 事件里读 `context.agent` | 生成为该预设自身 `@deepseek-ai/dsh-persona` 的 `prefix`，天然只在预设隔离域内生效。官方公开类型里 `AssembleContext` 没有 `agent` 字段，因此不再依赖它 |
 | 工具行 | 拼接 YAML 文本，引用了 0.2 已不存在的 `@deepseek-ai/dsh-workflow-worker-thread` | 直接生成对象行，改用 `@deepseek-ai/dsh-workflow-ptc`，并与官方 `standard` 预设的行/配置对齐 |
-| user 消息注入 | `llm/stream` 里改写整份请求消息数组 | 恢复为**每次**主模型调用前置注入（与 0.1.x 原版一致），见下方「为什么必须每次注入」 |
-| assistant 消息注入 | 同左 | 同上，每次调用都注入 |
+| user / assistant 消息注入 | `llm/stream` 里改写整份请求消息数组 | 恢复为**每次**主模型调用前置注入（与 0.1.x 原版一致），见下方「为什么必须每次注入」 |
 | **抗上下文压缩** | — | user/assistant 条目**不进会话日志**，走请求级注入，因此不会被 compaction 摘要掉；system 条目走 persona → 系统提示词，官方明确「压缩绝不缩减系统提示词」 |
 | 引擎声明 | `engines.dsh: ">=0.1.5-rc.1 <0.2.0"` | `engines.dsh: ">=0.2.0-rc.1 <0.3.0"` |
 | 客户端清单 | `dsh.client.inject` 缺少 `@deepseek-ai/dsh-client-ui-slots`，没有 `immediately` | 补齐 `@deepseek-ai/dsh-client-ui-slots` 并设置 `immediately: true`。注意这两项只是**模块到达顺序 / 启动预取提示**，并不决定设置页是否注册——注册走的是 `ctx.slots.inject("settings.section", …)` |
@@ -66,6 +70,18 @@ DSH 0.2 移除了 0.1.x 的「目录即预设」模型，旧实现整体失效�
 | 插件显示元数据 | 0.2.1 不读 `dsh.plugin.json`；改为从包的 `package.json.icon`（包内相对路径，SVG/PNG/JPEG/WebP，≤256 KiB）与 `./locale/*.json` 的 `meta.title` / `meta.description` 读取，并经 module resolver 解析 | 新增包根 `icon.svg`、`locale/en.json`（英文回退）、`locale/zh.json`；`package.json` 补根字段 `"icon": "./icon.svg"`、`dsh.manifestVersion: 1`、`exports["./locale/*.json"]`，`files` 补 `locale` / `icon.svg` |
 | 版本 | — | `1.1.0` → `1.2.0` |
 
+### 1.3.0 变更（v1.3.0，2026-10-19）
+
+| 问题 | 官方事实 | 本版本处理 |
+|---|---|---|
+| `{{cwd}}` 模板变量 | DSH 0.2.1 的 prompt 变量只由 core 注册 `provider` / `model` 两个；`dsh-system-prompt/README.zh.md` 明确要求移除 `{{cwd}}`，工作目录改由 `dsh-working-directory` 作为必需运行时上下文注入。未注册变量会在 `renderPrompt()` 抛错，整个预设不可用 | UI/README/注释删除 `{{cwd}}`；【变量说明】改为【预设说明】；system 输入框与示例只保留 `{{model}}` / `{{provider}}` |
+| 模板变量写错无法及时发现 | 严格插值：未知变量、无值变量、格式错误都会在每次请求前让组装失败 | 保存 / 导入时校验 `system` 条目：只允许 `model`、`provider`，其余 `{{...}}` 直接拦截并提示 |
+| 官方中文文案没复用 | 官方工具包自带 `locale/zh.json` 的 `meta.title` / `meta.description`（Bash、PowerShell、文件、搜索、Jobs、Web、Skill、提问、Todo、Present、Goal、Plan、Subagent、Workflow、Compaction、Cordis API 查询等） | AI 工具清单改用官方中文；官方无中文的（`tool-schedule`、`tool-str-replace-editor`）由本插件补译 |
+| 工具清单缺项 | 官方 `standard` 预设默认包含 `time-context`、`tool-schedule`、goal、plan-mode、subagent/workflow | 全部补上，默认勾选与官方 `standard` 对齐；新增 `tool-cordis`（默认关闭，依赖宿主 Inspect 提供者） |
+| 宿主级工具被误列为可勾选 | 团队工具、会话检索、Ralph、工作树、IM 文件发送、pwd/cd、插件管理面等由宿主/其它插件直接提供；预设里重复挂载会重复注册或服务缺失 | 从“AI 工具”清单移除运行时工具合并；新增【宿主级工具（已屏蔽）】说明，只展示不生成插件行 |
+| plan-mode 文案过时 | 官方 standard 的 planning 段已更新（直到用户批准/切换模式、exit_plan_mode 约束等） | `tools.js` 的 `PLAN_MODE_SECTION` 与官方 `0.2.1-rc.2` 同步 |
+| 版本 | — | `1.2.0` → `1.3.0` |
+
 ### 为什么必须每次注入（抗压缩）
 
 DSH 的压缩（`@deepseek-ai/dsh-compaction-basic`）在 token 压力越过阈值时，
@@ -81,19 +97,22 @@ DSH 的压缩（`@deepseek-ai/dsh-compaction-basic`）在 token 压力越过阈�
 
 | 条目 | 去向 | 会不会被压缩掉 |
 |---|---|---|
-| `system` | persona → 系统提示词（表层节点 0） | ❌ 不会（官方保证） |
+| `system` | persona → 系统提示词 | ❌ 不会（官方保证） |
 | `user` | 请求级注入，每次调用都在场 | ❌ 不会 |
 | `assistant` | 请求级注入，每次调用都在场 | ❌ 不会 |
 
 > 早期实现曾把 `user` 条目通过 `agent/pre-step` 播种进会话日志、`assistant` 条目只注入一次。
-> 实测（`work/compare-injection.mjs`）显示：压缩发生后两者都会消失，因为日志里的注入消息正是「最旧的历史」，
-> 而只注入一次的 assistant 消息从第二轮起就不在任何地方了。现已改回每次注入。
+> 实测显示：压缩发生后两者都会消失，因为日志里的注入消息正是「最旧的历史」，
+> 而只注入一次的 assistant 消息从第二轮起就不在任何地方了。现为每次注入。
+> 代价：`user` / `assistant` 条目是**请求可见但不入会话日志**的引导消息，不会出现在对话记录里。
+> 这是为了抗压缩而做的取舍：要让它们既入日志又不被压缩，DSH 当前没有受支持的入口。
 
 ### 已知限制
 
-- `user` / `assistant` 条目是**请求可见但不入会话日志**的引导消息，因此不会出现在对话记录里。
-  这是为了抗压缩而做的取舍：要让它们既入日志又不被压缩，DSH 当前没有受支持的入口。
+- `user` / `assistant` 条目不会出现在对话记录里（见上）。
 - 预设注册在插件启用期间有效；禁用本插件后，它注册的预设会一并消失。
+- `system` 里不支持字面量 `{{`：DSH 目前没有转义语法，任何完整 `{{...}}` 组都会被当作变量引用。保存时校验会拦截。
+- 预设一旦写了 system 文本，就会**替换**部署默认人格（`dsh-persona` 同名 section 遮蔽部署级），不会自动保留官方的 `You are a coding agent powered by ...` 行；如需保留请在 system 里自己写。
 
 ---
 
@@ -120,6 +139,11 @@ git clone https://github.com/Td0000000/dsh-preset-editor.git ~/.dsh/plugins/dsh-
 
 - 预设存储：`$DSH_HOME/preset-editor.json`（`$DSH_HOME` 默认 `~/.dsh`）
 - 旧版遗留目录（仅一次性迁移，之后不再使用）：`$DSH_HOME/.agent-presets/`
+- HTTP 接口（供 UI 与外部工具使用）：
+  - `GET /dsh-preset-editor/state`（`?diagnostics=1` 附带挂载诊断）
+  - `GET /dsh-preset-editor/tools`（返回可挂载工具 + 被屏蔽的宿主级工具）
+  - `POST /dsh-preset-editor/save` / `delete` / `import`
+  - `GET /dsh-preset-editor/export`（`?id=` 或 `?all=1`）
 
 ---
 
