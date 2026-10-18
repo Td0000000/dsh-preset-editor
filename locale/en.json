@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Preset Editor",
-    "description": "Create and edit custom agent presets: SYS/USER/ASSISTANT message orchestration, officially localized AI tools, and template-variable validation."
+    "description": "Create and edit custom agent presets: SYS/USER/ASSISTANT message orchestration, officially localized AI tools, custom plugin rows, and template-variable validation."
   }
 }
