@@ -264,7 +264,8 @@ window.__ModuleLoader__.load({
       const [view, setView] = useState("current");
       const [doc, setDoc] = useState(null);
       const [allTools, setAllTools] = useState([]);
-      const [hostProvided, setHostProvided] = useState([]);
+      const [runtimeTools, setRuntimeTools] = useState([]);
+      const [filteredDshCount, setFilteredDshCount] = useState(0);
       const [notice, setNotice] = useState({ kind: "idle", text: "" });
       const [busy, setBusy] = useState(false);
 
@@ -299,7 +300,8 @@ window.__ModuleLoader__.load({
           .then((d) => {
             if (d.ok) {
               setAllTools(d.tools || []);
-              setHostProvided(d.hostProvided || []);
+              setRuntimeTools(d.runtimeTools || []);
+              setFilteredDshCount(Number(d.filteredDshCount) || 0);
             }
           })
           .catch(() => {});
@@ -319,39 +321,6 @@ window.__ModuleLoader__.load({
       }, [notice]);
 
       // 进入新建预设页面
-      const toDraftCustomPlugins = (list) =>
-        (Array.isArray(list) ? list : []).map((row, i) => ({
-          key: row?.id || `c-${i}-${Math.random().toString(36).slice(2, 8)}`,
-          id: typeof row?.id === "string" ? row.id : "",
-          name: typeof row?.name === "string" ? row.name : "",
-          configText: row?.config === undefined ? "" : JSON.stringify(row.config, null, 2),
-          disabled: row?.disabled === true,
-        }));
-
-      // 把编辑态（configText 文本）转成存储态（config 对象），并做保存前校验。
-      const buildCustomPluginPayload = (rows) =>
-        (Array.isArray(rows) ? rows : []).map((row, i) => {
-          const name = String(row.name || "").trim();
-          if (!name) throw new Error(`第 ${i + 1} 条自定义插件行缺少插件包名。`);
-          const text = String(row.configText || "").trim();
-          let config;
-          if (text) {
-            try {
-              config = JSON.parse(text);
-            } catch (e) {
-              throw new Error(`第 ${i + 1} 条自定义插件行的配置不是合法 JSON：${e.message}`);
-            }
-            if (!config || typeof config !== "object") {
-              throw new Error(`第 ${i + 1} 条自定义插件行的配置必须是 JSON 对象或数组。`);
-            }
-          }
-          const out = { name };
-          if (row.id) out.id = row.id;
-          if (config !== undefined) out.config = config;
-          if (row.disabled) out.disabled = true;
-          return out;
-        });
-
       const handleOpenCreate = () => {
         const defaultToolIds = allTools.filter((t) => t.defaultEnabled).map((t) => t.id);
         setDraft({
@@ -359,7 +328,6 @@ window.__ModuleLoader__.load({
           name: "",
           description: "",
           enabledTools: defaultToolIds.length > 0 ? defaultToolIds : ["time-context", "tool-bash", "tool-pwsh", "tool-fs", "tool-fs-search", "tool-jobs", "tool-web", "tool-skill", "tool-ask-user", "tool-todo", "tool-present", "tool-goal", "plan-mode", "tool-subagent", "tool-schedule", "compaction"],
-          customPlugins: [],
           // 顶级第一条必须是 system 且为启用状态
           entries: [
             { id: "e-1", role: "system", text: "", enabled: true },
@@ -374,7 +342,6 @@ window.__ModuleLoader__.load({
       // 进入编辑预设页面
       const handleOpenEdit = (preset) => {
         const copy = JSON.parse(JSON.stringify(preset));
-        copy.customPlugins = toDraftCustomPlugins(preset.customPlugins);
         // 确保顶级第一条必须是启用状态的 system
         if (copy.entries && copy.entries.length > 0) {
           copy.entries[0].role = "system";
@@ -439,20 +406,11 @@ window.__ModuleLoader__.load({
           return;
         }
 
-        // 自定义插件行（高级）：转成存储态并校验包名 / config JSON。
-        let customPlugins;
-        try {
-          customPlugins = buildCustomPluginPayload(draft.customPlugins);
-        } catch (error) {
-          setNotice({ kind: "error", text: String(error?.message || error) });
-          return;
-        }
-
         setBusy(true);
         fetch("/dsh-preset-editor/save", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ preset: { ...draft, id: idClean, customPlugins } }),
+          body: JSON.stringify({ preset: { ...draft, id: idClean } }),
         })
           .then((r) => r.json())
           .then((d) => {
@@ -617,39 +575,6 @@ window.__ModuleLoader__.load({
         });
       };
 
-      // 自定义插件行（高级）操作
-      const addCustomPlugin = () => {
-        setDraft((prev) => ({
-          ...prev,
-          customPlugins: [
-            ...(prev.customPlugins || []),
-            {
-              key: `c-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-              id: "",
-              name: "",
-              configText: "",
-              disabled: false,
-            },
-          ],
-        }));
-      };
-
-      const updateCustomPlugin = (idx, patch) => {
-        setDraft((prev) => ({
-          ...prev,
-          customPlugins: (prev.customPlugins || []).map((row, i) =>
-            i === idx ? { ...row, ...patch } : row,
-          ),
-        }));
-      };
-
-      const removeCustomPlugin = (idx) => {
-        setDraft((prev) => ({
-          ...prev,
-          customPlugins: (prev.customPlugins || []).filter((_, i) => i !== idx),
-        }));
-      };
-
       const presetsList = doc && doc.presets ? Object.values(doc.presets) : [];
 
       // 渲染顶部固定标题与说明（完全符合用户要求）
@@ -754,9 +679,6 @@ window.__ModuleLoader__.load({
                   h("span", {
                     style: S.badge("rgba(59, 130, 246, 0.15)", THEME.accent),
                   }, `${toolCount} 个工具`),
-                  (p.customPlugins || []).length > 0
-                    ? h("span", { style: S.badge("rgba(139, 92, 246, 0.15)", THEME.roleAssistant) }, `自定义插件 ${p.customPlugins.length}`)
-                    : null,
                 ),
                 // 描述
                 p.description ? h("p", {
@@ -994,7 +916,7 @@ window.__ModuleLoader__.load({
             },
               h("div", null,
                 h("h3", { style: { margin: 0, fontSize: "16px", fontWeight: 650 } }, "AI 工具配备"),
-                h("p", { style: { margin: "4px 0 0", fontSize: "12px", color: THEME.muted } }, "选择该预设会话要挂载的官方工具插件；名称与说明优先使用官方中文文案。清单外的第三方工具请用编辑页「自定义插件行」按包名挂载。"),
+                h("p", { style: { margin: "4px 0 0", fontSize: "12px", color: THEME.muted } }, "选择该预设会话要挂载的官方工具插件；名称与说明优先使用官方中文文案。DSH 自带工具会在下方自动过滤。"),
               ),
               h("button", {
                 style: Object.assign({}, S.btnSecondary, { padding: "4px 10px", fontSize: "12px" }),
@@ -1057,7 +979,8 @@ window.__ModuleLoader__.load({
                 );
               }),
               // 宿主级工具说明（不可勾选）
-              hostProvided.length > 0 ? h("div", {
+              // 其它插件在运行时提供的工具（只读展示；DSH 自带工具已过滤）
+              h("div", {
                 style: {
                   padding: "10px 12px",
                   borderRadius: "8px",
@@ -1068,12 +991,29 @@ window.__ModuleLoader__.load({
                   lineHeight: 1.6,
                 },
               },
-                h("div", { style: { fontWeight: 700, color: THEME.ink, marginBottom: "4px" } }, "宿主级工具（已屏蔽，不能放进预设）"),
-                h("div", null, hostProvided.map((t) => t.name).join("、")),
-                h("div", { style: { marginTop: "4px" } },
-                  "它们由 DSH 宿主或其它插件直接提供；在预设里重复挂载会导致重复注册或服务缺失。另外每个预设都会自动包含「工作区指令（AGENTS.md）」。",
+                h("div", { style: { fontWeight: 700, color: THEME.ink, marginBottom: "4px" } },
+                  `其它插件提供的工具（运行中，只读）${filteredDshCount > 0 ? ` · 已过滤 ${filteredDshCount} 个 DSH 自带工具` : ""}`,
                 ),
-              ) : null,
+                h("div", null,
+                  "这些工具由已启用的其它插件在运行时提供，已经在会话里可用；不需要也不能在这个预设里单独勾选。",
+                ),
+                runtimeTools.length === 0
+                  ? h("div", { style: { marginTop: "6px", color: THEME.dim } }, "当前没有检测到其它插件提供的工具。")
+                  : h("div", { style: { display: "flex", flexDirection: "column", gap: "6px", marginTop: "6px" } },
+                      runtimeTools.map((tool) => h("div", {
+                        key: tool.name,
+                        style: {
+                          padding: "6px 8px",
+                          borderRadius: "6px",
+                          background: "rgba(255,255,255,.025)",
+                          border: "1px solid " + THEME.borderLight,
+                        },
+                      },
+                        h("code", { style: { fontSize: "11.5px", color: THEME.accent, fontWeight: 700 } }, tool.name),
+                        tool.description ? h("div", { style: { fontSize: "11px", marginTop: "2px", color: THEME.dim } }, tool.description) : null,
+                      )),
+                    ),
+              ),
             ),
             // 弹窗底部
             h("div", {
@@ -1322,78 +1262,6 @@ window.__ModuleLoader__.load({
                 onClick: () => addEntry("user"),
               }, "+ 添加新消息条目"),
             ),
-          ),
-
-          // 自定义插件行（高级）
-          h("div", { style: S.card },
-            h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "10px", flexWrap: "wrap" } },
-              h("div", null,
-                h("span", { style: { fontSize: "14px", fontWeight: 650 } }, "自定义插件行（高级）"),
-                h("span", { style: { fontSize: "12px", color: THEME.muted, marginLeft: "8px" } }, "按插件包名挂载官方工具清单之外的第三方工具/插件"),
-              ),
-              h("button", {
-                style: Object.assign({}, S.btnSecondary, { padding: "5px 10px", fontSize: "12px" }),
-                onClick: addCustomPlugin,
-              }, "+ 添加插件行"),
-            ),
-            h("div", { style: { fontSize: "12px", color: THEME.muted, lineHeight: 1.6 } },
-              "name 填插件包名（如 dsh-my-tool-plugin 或 @scope/plugin），也可以填 file:// 模块地址；config 为可选 JSON，留空表示不传配置。",
-              h("div", { style: { marginTop: "4px", color: THEME.warning } },
-                "注意：这些行会在预设挂载时执行插件代码，只添加你信任的插件；填错会让预设挂载失败（可在官方预设列表看到诊断）。",
-              ),
-            ),
-            (draft.customPlugins || []).length === 0
-              ? h("div", { style: { fontSize: "12px", color: THEME.dim, padding: "10px 12px", border: "1px dashed " + THEME.border, borderRadius: "8px" } },
-                  "暂无自定义插件行（官方工具通常够用）。",
-                )
-              : (draft.customPlugins || []).map((row, idx) =>
-                  h("div", {
-                    key: row.key || idx,
-                    style: Object.assign({}, S.card, {
-                      gap: "8px",
-                      padding: "12px",
-                      background: "rgba(255,255,255,.02)",
-                    }),
-                  },
-                    h("div", { style: { display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" } },
-                      h("span", { style: { fontSize: "12px", fontWeight: 700, color: THEME.dim } }, `#${idx + 1}`),
-                      h("input", {
-                        style: Object.assign({}, S.input, { flex: "1 1 260px", minWidth: "220px" }),
-                        value: row.name || "",
-                        placeholder: "插件包名，如 dsh-my-tool-plugin 或 @scope/plugin",
-                        onChange: (e) => updateCustomPlugin(idx, { name: e.target.value }),
-                      }),
-                      h("label", {
-                        style: {
-                          display: "inline-flex",
-                          alignItems: "center",
-                          gap: "5px",
-                          fontSize: "12px",
-                          color: row.disabled ? THEME.dim : THEME.ink,
-                          cursor: "pointer",
-                          userSelect: "none",
-                        },
-                      },
-                        h("input", {
-                          type: "checkbox",
-                          checked: row.disabled !== true,
-                          onChange: (e) => updateCustomPlugin(idx, { disabled: !e.target.checked }),
-                        }),
-                        row.disabled ? "已停用" : "启用",
-                      ),
-                      h("button", {
-                        style: Object.assign({}, S.btnSecondary, { padding: "4px 10px", fontSize: "12px", color: THEME.danger }),
-                        onClick: () => removeCustomPlugin(idx),
-                      }, "删除"),
-                    ),
-                    h("textarea", {
-                      style: Object.assign({}, S.textarea, { minHeight: "70px", fontSize: "12px" }),
-                      value: row.configText || "",
-                      placeholder: '可选配置 JSON，例如 { "option": true }（留空表示无配置）',
-                      onChange: (e) => updateCustomPlugin(idx, { configText: e.target.value }),
-                    }),
-                  ),
-                ),
           ),
         );
       };

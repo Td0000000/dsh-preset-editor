@@ -1,7 +1,7 @@
 {
   "name": "dsh-preset-editor",
-  "version": "1.4.0",
-  "description": "DeepSeek Harness visual preset editor: custom agent presets with SYS/USER/ASSISTANT message orchestration, officially localized AI tools, custom plugin rows, and template-variable validation.",
+  "version": "1.4.1",
+  "description": "DeepSeek Harness visual preset editor: custom agent presets with SYS/USER/ASSISTANT message orchestration, officially localized AI tools, runtime tool awareness, and template-variable validation.",
   "type": "module",
   "main": "lib/index.js",
   "icon": "./icon.svg",

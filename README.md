@@ -2,9 +2,11 @@
 
 DeepSeek Harness 自定义预设可视化编辑插件。
 
-支持对自定义 Agent 预设进行可视化创建、编辑、管理与导入导出，支持 `system`、`user`、`assistant` 消息编排，支持自主配备 AI 工具与第三方插件行，直接融入官方 Agent 预设体系，新会话一键选择即可生效。
+支持对自定义 Agent 预设进行可视化创建、编辑、管理与导入导出，支持 `system`、`user`、`assistant` 消息编排，支持自主配备 AI 工具，直接融入官方 Agent 预设体系，新会话一键选择即可生效。
 
-> **本版本（v1.4.0）已适配 DSH `0.2.1-rc.2`**（见下方「0.2 适配说明」「0.2.1 适配说明」「1.3.0 变更」「1.4.0 变更」）。
+> **本版本（v1.4.1）已适配 DSH `0.2.1-rc.2`**（见下方「0.2 适配说明」「0.2.1 适配说明」「1.4.1 变更」「1.3.0 变更」）。
+>
+> 1.4.1 说明：**回退了 1.4.0 的「自定义插件行」**（需求理解有误），改为在「AI 工具」弹窗最下方**只读展示运行时由其它插件提供的 AI 可调用工具**，并自动过滤 DSH 自带工具。
 
 ---
 
@@ -30,17 +32,14 @@ DeepSeek Harness 自定义预设可视化编辑插件。
    - 名称与说明优先取自官方包自带的中文文案（`locale/zh.json` 的 `meta.title` / `meta.description`），官方没有中文的（定时提醒、精准文本替换）才由本插件补译。
    - 默认工具集与官方 `standard` 预设对齐，并补上官方有、本插件之前缺的：`time-context`（时间感知）、`tool-schedule`（定时提醒）、goal、plan-mode、subagent/workflow。
    - 生成的插件行与官方 `dsh-web-app` 的 `standard` 预设同构，含官方要求的 `isolate` 隔离域（`planMode` / `compaction` / `toolResultPruner` / `workflowEngine`）。
-   - **宿主级工具已屏蔽**：`pwd/cd`、会话检索、Ralph、团队工具、工作树、IM 文件发送、插件管理面等由 DSH 宿主或其它插件进程级/按 agent 提供，不能再挂进预设（重复挂载会重复注册或服务缺失，导致预设 broken）。这些只在弹窗里做说明，不生成插件行。
+   - **运行时扩展工具（只读）**：弹窗最下方展示当前运行时由**其它插件**提供的 AI 可调用工具（例如 `dsh-im` 的文件发送工具、用户自装插件注册的工具）；**DSH 自带工具会被自动过滤**。这些工具已经在会话里可用，不需要、也不能在预设里单独勾选；只用于让用户看到“这个环境里还有哪些 AI 可调用能力”。
+   - DSH 自带工具名维护在 `lib/tools.js` 的 `DSH_BUILTIN_TOOL_NAMES`；官方新增工具时需要补充该清单。
 5. **官方模板变量（已校正）**
    - 界面内置【预设说明】入口（原「变量说明」），同时解释预设、三种条目与官方提示词注入规则。
    - DSH `0.2.1-rc.2` 实际只注册 **`{{model}}`、`{{provider}}`** 两个模板变量，仅 `system` 条目会插值。
    - **`{{cwd}}` 已过时**：工作目录现在由 `dsh-working-directory` 作为“运行时上下文”自动注入，不是模板变量。写 `{{cwd}}` 会让整个预设组装失败。
    - 保存 / 导入时会自动校验模板变量：只放行 `model` / `provider`，其余 `{{...}}` 直接报错拦截。
-6. **自定义插件行（高级）**
-   - 官方工具清单之外的第三方工具/插件，可以在编辑页按**插件包名**（或 `file://` 模块地址）添加为预设的 `customPlugins` 行，随预设挂载进同一个隔离域。
-   - 支持可选 `config`（JSON 对象/数组）、`id`、`disabled`；保存时校验包名、JSON、行 ID 冲突。
-   - 适合“某个插件提供了工具，但不在官方预设行清单里”的场景；不支持 `group` / `isolate`，复杂插件树请直接写 bundle patch。
-7. **导入 / 导出**
+6. **导入 / 导出**
    - 单个预设或全部预设导出为 JSON，一键导入，便于备份与跨机器迁移。
 
 ---
@@ -74,6 +73,15 @@ DSH 0.2 移除了 0.1.x 的「目录即预设」模型，旧实现整体失效�
 | 插件显示元数据 | 0.2.1 不读 `dsh.plugin.json`；改为从包的 `package.json.icon`（包内相对路径，SVG/PNG/JPEG/WebP，≤256 KiB）与 `./locale/*.json` 的 `meta.title` / `meta.description` 读取，并经 module resolver 解析 | 新增包根 `icon.svg`、`locale/en.json`（英文回退）、`locale/zh.json`；`package.json` 补根字段 `"icon": "./icon.svg"`、`dsh.manifestVersion: 1`、`exports["./locale/*.json"]`，`files` 补 `locale` / `icon.svg` |
 | 版本 | — | `1.1.0` → `1.2.0` |
 
+### 1.4.1 变更（v1.4.1，2026-10-19）
+
+| 问题 | 事实 | 本版本处理 |
+|---|---|---|
+| 1.4.0 的「自定义插件行」理解错了需求 | 用户要的是在工具选择最下方**看到**其它插件提供的 AI 可调用工具，而不是给预设加任意插件行 | 回退 `customPlugins` 数据/UI/校验/文档；数据文件里即使残留该字段也会被忽略 |
+| 运行时工具与 DSH 自带工具混在一起 | `ctx.tools.schemas()`（不带 scope）返回宿主全局视图，其中既有 DSH 自带工具，也有其它插件注册的工具，且没有来源字段 | 新增 `DSH_BUILTIN_TOOL_NAMES` 官方工具名清单 + `filterRuntimeTools()`：工具弹窗最下方只展示**不在清单里**的工具（即其它插件提供），DSH 自带自动过滤；列表只读，并显示过滤数量 |
+| 运行时工具不能挂进预设 | 工具名不是插件行，没有“工具 → 插件包”的可靠映射 | 只读展示并明确说明“已在会话可用，不需要也不能在这里勾选”，避免再次误导 |
+| 版本 | — | `1.3.0` → `1.4.1`（1.4.0 已回退） |
+
 ### 1.3.0 变更（v1.3.0，2026-10-19）
 
 | 问题 | 官方事实 | 本版本处理 |
@@ -82,56 +90,9 @@ DSH 0.2 移除了 0.1.x 的「目录即预设」模型，旧实现整体失效�
 | 模板变量写错无法及时发现 | 严格插值：未知变量、无值变量、格式错误都会在每次请求前让组装失败 | 保存 / 导入时校验 `system` 条目：只允许 `model`、`provider`，其余 `{{...}}` 直接拦截并提示 |
 | 官方中文文案没复用 | 官方工具包自带 `locale/zh.json` 的 `meta.title` / `meta.description`（Bash、PowerShell、文件、搜索、Jobs、Web、Skill、提问、Todo、Present、Goal、Plan、Subagent、Workflow、Compaction、Cordis API 查询等） | AI 工具清单改用官方中文；官方无中文的（`tool-schedule`、`tool-str-replace-editor`）由本插件补译 |
 | 工具清单缺项 | 官方 `standard` 预设默认包含 `time-context`、`tool-schedule`、goal、plan-mode、subagent/workflow | 全部补上，默认勾选与官方 `standard` 对齐；新增 `tool-cordis`（默认关闭，依赖宿主 Inspect 提供者） |
-| 宿主级工具被误列为可勾选 | 团队工具、会话检索、Ralph、工作树、IM 文件发送、pwd/cd、插件管理面等由宿主/其它插件直接提供；预设里重复挂载会重复注册或服务缺失 | 从“AI 工具”清单移除运行时工具合并；新增【宿主级工具（已屏蔽）】说明，只展示不生成插件行 |
+| 宿主级工具被误列为可勾选 | 团队工具、会话检索、Ralph、工作树、IM 文件发送、pwd/cd、插件管理面等由宿主/其它插件直接提供；预设里重复挂载会重复注册或服务缺失 | 从“AI 工具”清单移除运行时工具合并（1.4.1 改为在最下方只读展示，并过滤 DSH 自带工具） |
 | plan-mode 文案过时 | 官方 standard 的 planning 段已更新（直到用户批准/切换模式、exit_plan_mode 约束等） | `tools.js` 的 `PLAN_MODE_SECTION` 与官方 `0.2.1-rc.2` 同步 |
 | 版本 | — | `1.2.0` → `1.3.0` |
-
-### 1.4.0 变更（v1.4.0，2026-10-19）
-
-| 问题 | 官方事实 | 本版本处理 |
-|---|---|---|
-| 第三方工具/插件无法进预设 | 预设本来就是一份 Cordis 插件行列表；官方工具清单之外，只要插件包能被 profile 解析到，就可以作为一行挂进预设。但本编辑器之前只能从固定 `enabledTools` 目录生成行 | 新增 `customPlugins`（自定义插件行）数据与编辑页 UI：按包名 + 可选 config 挂载任意单行插件；保存/导入时校验包名、config JSON、行 ID 冲突 |
-| 以前从运行时合并的工具无法挂载 | `ctx.tools.schemas()` 是“运行中的工具”，不是“可挂载的插件行”；宿主级工具重复挂载还会冲突 | 维持 1.3.0 的处理：工具清单只列可安全挂载的官方行；清单外的能力通过自定义插件行按包名接入 |
-| 单个预设损坏会拖垮整次同步 | 同步循环里对一条预设生成声明失败会中断其余预设 | `sync()` 对每条预设单独捕获声明生成错误，记录到诊断并继续同步其它预设；加载时也打印跳过原因 |
-| 版本 | — | `1.3.0` → `1.4.0` |
-
-### 自定义插件行（高级）
-
-一个预设声明本质是：
-
-```yaml
-plugins:
-  - name: '@deepseek-ai/dsh-persona'
-  - name: '@deepseek-ai/dsh-tool-fs'
-  - name: dsh-my-tool-plugin      # ← customPlugins 生成的行
-```
-
-所以第三方插件只要提供一个可加载的包名（或 `file://` 模块地址），就能挂进预设。数据示例：
-
-```json
-{
-  "customPlugins": [
-    { "name": "@scope/dsh-my-tool", "config": { "option": true } },
-    { "id": "extra-row", "name": "file:///C:/plugins/extra.mjs", "disabled": true }
-  ]
-}
-```
-
-| 字段 | 必填 | 说明 |
-|---|---|---|
-| `name` | 是 | 插件包名 / Cordis 插件名 / `file://` 模块地址；由 Loader 按 profile 的解析基址解析 |
-| `config` | 否 | 传给该插件行的配置，必须是 JSON 对象或数组 |
-| `id` | 否 | Loader 行 ID；同一预设内必须唯一（省略时由 Loader 分配） |
-| `disabled` | 否 | 设为 `true` 可临时停用该行 |
-
-限制与注意：
-
-- 最多 64 条；行会追加在官方工具行之后。
-- 只支持**单行插件**，不支持 `group` / `isolate`；需要分组或服务隔离时请写 bundle patch。
-- 预设插件在 Host 进程执行代码，**只添加你信任的插件**。
-- 填错包名或配置会让该预设挂载失败（官方预设列表会显示诊断；`/dsh-preset-editor/state?diagnostics=1` 也能看到）。
-- 若自定义插件注册的工具名/服务名与已勾选的官方工具重复，预设同样会挂载失败；建议一次只加一条并验证。
-- 这仍是“按包名手动挂载”，不是自动发现：编辑器不会（也无法可靠地）把其它插件注册的运行时工具反推成插件包名。
 
 ### 为什么必须每次注入（抗压缩）
 
@@ -164,7 +125,8 @@ DSH 的压缩（`@deepseek-ai/dsh-compaction-basic`）在 token 压力越过阈�
 - 预设注册在插件启用期间有效；禁用本插件后，它注册的预设会一并消失。
 - `system` 里不支持字面量 `{{`：DSH 目前没有转义语法，任何完整 `{{...}}` 组都会被当作变量引用。保存时校验会拦截。
 - 预设一旦写了 system 文本，就会**替换**部署默认人格（`dsh-persona` 同名 section 遮蔽部署级），不会自动保留官方的 `You are a coding agent powered by ...` 行；如需保留请在 system 里自己写。
-- 自定义插件行只支持单行插件，不支持 `group` / `isolate`；且只按包名挂载，不会自动发现其它插件提供的运行时工具。
+- 自定义插件行已回退：预设只挂载 `enabledTools` 对应的官方工具行，不接受任意第三方插件行。
+- 运行时扩展工具列表是**只读展示**：它来自 `ctx.tools.schemas()` 的宿主全局视图，不能按预设启用；DSH 自带工具按静态名单过滤，官方新增工具时需要更新 `DSH_BUILTIN_TOOL_NAMES`。
 
 ---
 
@@ -193,7 +155,7 @@ git clone https://github.com/Td0000000/dsh-preset-editor.git ~/.dsh/plugins/dsh-
 - 旧版遗留目录（仅一次性迁移，之后不再使用）：`$DSH_HOME/.agent-presets/`
 - HTTP 接口（供 UI 与外部工具使用）：
   - `GET /dsh-preset-editor/state`（`?diagnostics=1` 附带挂载诊断）
-  - `GET /dsh-preset-editor/tools`（返回可挂载工具 + 被屏蔽的宿主级工具）
+  - `GET /dsh-preset-editor/tools`（返回可挂载工具 + 其它插件运行时提供的工具 `runtimeTools` + 被过滤的 DSH 自带工具数量 `filteredDshCount`）
   - `POST /dsh-preset-editor/save` / `delete` / `import`
   - `GET /dsh-preset-editor/export`（`?id=` 或 `?all=1`）
 
