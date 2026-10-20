@@ -132,14 +132,33 @@ DSH 的压缩（`@deepseek-ai/dsh-compaction-basic`）在 token 压力越过阈�
 
 ## 📦 安装
 
+### 方式一：让 AI 一键安装（推荐 · 无需编译）
+
+本仓库根目录已附带**编译好的安装包**：[`dsh-preset-editor-1.4.1.tgz`](./dsh-preset-editor-1.4.1.tgz)。它不需要 `pnpm install` / `pnpm run build`，直接安装即可。
+
+把仓库拉到本地后，把下面这段提示词发给你的 AI 编程助手（Pi / Claude Code / Cursor / Windsurf / DSH 内置 Coding Agent）：
+
+```text
+请帮我把这个 DSH 插件装到当前 DSH profile：
+
+1. 克隆仓库到本地任意目录：git clone https://github.com/Td0000000/dsh-preset-editor.git
+2. 用 DSH 的 plugin_manager 工具执行 install_bundle，target 传仓库根目录里 tgz 的绝对路径，
+   例如 <克隆目录>/dsh-preset-editor-1.4.1.tgz
+   （install_bundle 会自动写入 profile 的 dependencies、加入 dsh.profile.bundles 并热重载，
+     不需要手改 package.json / cordis.patch.yml / node_modules）
+3. 看到结果里 application=applied 后刷新页面，设置页左侧应出现【预设编辑】入口。
+```
+
+### 方式二：从源码目录安装（开发者）
+
 ```bash
-# 1. 克隆到插件目录
-git clone https://github.com/Td0000000/dsh-preset-editor.git ~/.dsh/plugins/dsh-preset-editor
+# 1. 克隆到本地任意目录
+git clone https://github.com/Td0000000/dsh-preset-editor.git
 ```
 
 然后在 DSH 里安装该 bundle（二选一）：
 
-- **推荐**：用 DSH 的 `plugin_manager` 以 `install_bundle` 安装，`target` 传该目录的绝对路径；
+- 用 DSH 的 `plugin_manager` 以 `install_bundle` 安装，`target` 传该目录的绝对路径（本仓库已提交 `lib/`，可直接安装）；
 - 或在「设置 → 插件」中把该目录作为本地插件安装。
 
 安装完成后：
