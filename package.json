@@ -1,6 +1,6 @@
 {
   "name": "dsh-preset-editor",
-  "version": "1.4.1",
+  "version": "1.5.1",
   "description": "DeepSeek Harness visual preset editor: custom agent presets with SYS/USER/ASSISTANT message orchestration, officially localized AI tools, runtime tool awareness, and template-variable validation.",
   "type": "module",
   "main": "lib/index.js",
@@ -49,9 +49,9 @@
     }
   },
   "engines": {
-    "dsh": ">=0.2.0-rc.1 <0.3.0"
+    "dsh": ">=0.2.2-rc.1 <0.3.0"
   },
   "peerDependencies": {
-    "@deepseek-ai/cordis": "^4.0.1"
+    "@deepseek-ai/cordis": "~4.1.0"
   }
 }

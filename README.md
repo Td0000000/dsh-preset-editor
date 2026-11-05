@@ -4,9 +4,11 @@ DeepSeek Harness 自定义预设可视化编辑插件。
 
 支持对自定义 Agent 预设进行可视化创建、编辑、管理与导入导出，支持 `system`、`user`、`assistant` 消息编排，支持自主配备 AI 工具，直接融入官方 Agent 预设体系，新会话一键选择即可生效。
 
-> **本版本（v1.4.1）已适配 DSH `0.2.1-rc.2`**（见下方「0.2 适配说明」「0.2.1 适配说明」「1.4.1 变更」「1.3.0 变更」）。
+> **本版本（v1.5.1）已适配 DSH NEXT `2.0.22-next`（内核 DeepSeek Harness `0.2.2-rc.1`）**（见下方「0.2.2 适配说明」及历史适配记录）。
 >
-> 1.4.1 说明：**回退了 1.4.0 的「自定义插件行」**（需求理解有误），改为在「AI 工具」弹窗最下方**只读展示运行时由其它插件提供的 AI 可调用工具**，并自动过滤 DSH 自带工具。
+> 1.5.1 说明：**修复 0.2.2 内核下所有自定义预设变成 broken 的根因**——`@deepseek-ai/dsh-tool-subagent-control` 删除了 `./list-agents` 子路径导出，旧预设里的 `tool-subagent-list-agents` 行无法解析，导致挂载失败、预设不可用。同时同步 0.2.2 的子代理 `modelSelection`/`modelDiscovery` 配置、官方新增的插件管理工具行与内置工具名单，并补上插件卸载/热重载时的预设与路由清理。
+>
+> 历史：1.4.1 回退了 1.4.0 的「自定义插件行」（需求理解有误），改为在「AI 工具」弹窗最下方**只读展示运行时由其它插件提供的 AI 可调用工具**，并自动过滤 DSH 自带工具。
 
 ---
 
@@ -94,6 +96,25 @@ DSH 0.2 移除了 0.1.x 的「目录即预设」模型，旧实现整体失效�
 | plan-mode 文案过时 | 官方 standard 的 planning 段已更新（直到用户批准/切换模式、exit_plan_mode 约束等） | `tools.js` 的 `PLAN_MODE_SECTION` 与官方 `0.2.1-rc.2` 同步 |
 | 版本 | — | `1.2.0` → `1.3.0` |
 
+### 0.2.2 适配说明（v1.5.1，2026-11-05）
+
+DSH NEXT `2.0.22-next` 把内核升级到 `0.2.2-rc.1`（Cordis `4.1.0`）。本次逐项核对后，改动如下：
+
+| 问题 | 0.2.2 官方事实 | 本版本处理 |
+|---|---|---|
+| **所有自定义预设变成 broken、无法在新会话选择（本次失效根因）** | `@deepseek-ai/dsh-tool-subagent-control` 的 `exports` 已删除 `./list-agents` 子路径；root 包一次注册 `send_message` / `interrupt_agent` / `list_agents` 三个工具。旧行 `tool-subagent-list-agents` 解析失败 → 该 child row `never started` → 整棵预设挂载失败（`agentPresets.list()` 返回 `broken`，`retain()`/会话绑定直接拒绝） | 删除 `/list-agents` 行，只保留 root 包行；所有含「子代理与工作流」工具的预设恢复正常挂载 |
+| 子代理模型选择配置失效 | `@deepseek-ai/dsh-tool-subagent` 的 Config 删除 `modelSelectionSettings`，拆成 `modelSelection` + `modelDiscovery`；官方 standard 在 spawn 实例开启两者、fork 实例保持关闭 | spawn 实例改为 `modelSelection: true, modelDiscovery: true`；fork 实例保持不开启（与官方一致，保 KV Cache 前缀复用） |
+| 官方 standard 新增插件管理工具行 | 0.2.2 的 `standard` 预设插入 `@deepseek-ai/dsh-plugin-manager/tools`，条件 `!!js "!ctx.get('profileContext')"`（无 profile 环境禁用） | 新增「插件管理工具」选项并默认勾选；行上的 `disabled` 由插件按当前宿主是否有 `profileContext` 计算，与官方条件同义 |
+| `tool-fs` 新增 `applyPatch` 开关 | 0.2.2 的 `tool-fs` Config 新增 `applyPatch`（默认 false）；官方 standard 显式写 `applyPatch: false` | 生成行显式写 `applyPatch: false`（行为与之前一致，只是明确化） |
+| 内置工具名单过时 | 0.2.2 新增 `create_skill` / `plugin_manager` / `plugin_market` / `schedule_view` / `schedule_edit`（`schedule_update`、`schedule_delete` 合并进 `schedule_edit`）与 `apply_patch`（tool-fs 的开关） | 补充进 `lib/tools.js` 的 `DSH_BUILTIN_TOOL_NAMES`；旧名字保留，兼容历史环境 |
+| 宿主 API 是否变化 | 逐项核对：`agentPresets.register()` / `composedPreset()`、`ctx.agents.get()`、`ctx.tools.schemas()`、`ctx.webServer.register()`（仍是 node 风格 `handler(req, res)`）、`llm/stream` waterfall、`export const inject` / `export function apply` 均未变 | 宿主侧逻辑无需结构性改动 |
+| loop 请求被 deep-freeze | 0.2.2 的 agent-loop 构造请求后 `deepFreeze`，官方约定 listener「只读、不改写」；`user`/`assistant` 请求级注入仍是 waterfall 允许的改写方式 | 注入器继续「不修改原 options，只用 `{ ...options, messages: [...] }` 发起新请求」，并用 WeakSet 防重入；实机验证注入生效 |
+| **插件热更新 / 禁用重载会留下脏状态** | 2.0.22 新增「插件 → 已安装」一键更新，插件行会被 HMR 重载。旧版宿主插件没有在卸载时注销自己注册的官方预设与 HTTP 路由，实测重载时报 `duplicate exact route "/dsh-preset-editor/state"` 与 `Duplicate agent preset`，新实例无法挂载 | `apply()` 里用 `ctx.effect` 注册卸载清理：停止后续同步、注销全部预设、释放全部 HTTP 路由；单条路由注册失败降级为警告（便于跨版本热更新） |
+| 客户端与设置页 | `settings.section` 注册方式、slot 选项、`window.__ModuleLoader__.load` 工厂格式、`/dsh-preset-editor/*` 同源 fetch、主题 token 在 0.2.2 均可用 | `client.js` 无需结构性改动；主题 token 沿用（实测页面正常渲染） |
+| 版本与兼容范围 | 内核 `0.2.2-rc.1`、Cordis `4.1.0` | `version` → `1.5.1`；`engines.dsh` → `>=0.2.2-rc.1 <0.3.0`；`peerDependencies.@deepseek-ai/cordis` → `~4.1.0` |
+
+**0.2.2 实机验证（隔离 profile + 官方 Host 启动器）**：插件可正常激活；`/dsh-preset-editor/state?diagnostics=1` 对所有预设返回 `ok: true`（含旧版遗留预设），启动日志不再出现 `never started`；设置页左侧出现【预设编辑】并正常读取数据；用自定义预设发起一轮真实对话，主模型请求实际收到 `system` persona 与每次请求前置的 `user`/`assistant` 注入条目；插件卸载/重载时会注销预设与路由。
+
 ### 为什么必须每次注入（抗压缩）
 
 DSH 的压缩（`@deepseek-ai/dsh-compaction-basic`）在 token 压力越过阈值时，
@@ -122,11 +143,16 @@ DSH 的压缩（`@deepseek-ai/dsh-compaction-basic`）在 token 压力越过阈�
 ### 已知限制
 
 - `user` / `assistant` 条目不会出现在对话记录里（见上）。
+- `user` / `assistant` 的请求级注入依赖 `llm/stream` waterfall「返回替换流」的能力：0.2.2 官方文档把 listener 描述为只读，并推荐改用 `agent/pre-step`，但 `agent/pre-step` 注入的消息会写进会话日志、因此会被压缩。为保住「不进日志、抗压缩」的设计，本插件仍用嵌套 `ctx.llm.stream(新请求)`（实机验证可用）；代价是每次请求多一次 adapter `prepareCall`，且新请求不携带 agent-loop 标记。若未来官方收紧该行为，需要改用 `agent/pre-step` 并接受压缩影响。
 - 预设注册在插件启用期间有效；禁用本插件后，它注册的预设会一并消失。
 - `system` 里不支持字面量 `{{`：DSH 目前没有转义语法，任何完整 `{{...}}` 组都会被当作变量引用。保存时校验会拦截。
 - 预设一旦写了 system 文本，就会**替换**部署默认人格（`dsh-persona` 同名 section 遮蔽部署级），不会自动保留官方的 `You are a coding agent powered by ...` 行；如需保留请在 system 里自己写。
 - 自定义插件行已回退：预设只挂载 `enabledTools` 对应的官方工具行，不接受任意第三方插件行。
 - 运行时扩展工具列表是**只读展示**：它来自 `ctx.tools.schemas()` 的宿主全局视图，不能按预设启用；DSH 自带工具按静态名单过滤，官方新增工具时需要更新 `DSH_BUILTIN_TOOL_NAMES`。
+- 预设 ID 不能与官方内置预设（`standard` / `ptc` / `minimal` / `cordis`）重名：`agentPresets.register()` 对重复 ID 直接抛错，保存/导入时会提前拦截。
+- 「插件管理工具」需要宿主提供 `profileContext`（桌面 / CLI profile 都有）；纯库环境里该行会被禁用，与官方 `standard` 预设的条件一致。该工具会走 DSH 审批流程，是否放进预设由你决定（默认与官方 standard 对齐、勾选）。
+- 子代理的路由字段只开在 `subagent`（spawn）实例上；`subagent_fork` 按官方约定不提供模型选择字段。
+- **升级到 0.2.2 后必须先更新插件再使用**：旧版 1.4.x 在 0.2.2 下会让预设挂载失败（`tool-subagent-list-agents` 行已不存在）。本插件宿主代码在启动时加载，更新插件后需要重启 DSH NEXT（或按插件页提示重启）才会生效。
 
 ---
 
@@ -134,7 +160,7 @@ DSH 的压缩（`@deepseek-ai/dsh-compaction-basic`）在 token 压力越过阈�
 
 ### 方式一：让 AI 一键安装（推荐 · 无需编译）
 
-本仓库根目录已附带**编译好的安装包**：[`dsh-preset-editor-1.4.1.tgz`](./dsh-preset-editor-1.4.1.tgz)。它不需要 `pnpm install` / `pnpm run build`，直接安装即可。
+本仓库根目录已附带**编译好的安装包**：[`dsh-preset-editor-1.5.1.tgz`](./dsh-preset-editor-1.5.1.tgz)。它不需要 `pnpm install` / `pnpm run build`，直接安装即可。
 
 把仓库拉到本地后，把下面这段提示词发给你的 AI 编程助手（Pi / Claude Code / Cursor / Windsurf / DSH 内置 Coding Agent）：
 
@@ -143,10 +169,11 @@ DSH 的压缩（`@deepseek-ai/dsh-compaction-basic`）在 token 压力越过阈�
 
 1. 克隆仓库到本地任意目录：git clone https://github.com/Td0000000/dsh-preset-editor.git
 2. 用 DSH 的 plugin_manager 工具执行 install_bundle，target 传仓库根目录里 tgz 的绝对路径，
-   例如 <克隆目录>/dsh-preset-editor-1.4.1.tgz
+   例如 <克隆目录>/dsh-preset-editor-1.5.1.tgz
    （install_bundle 会自动写入 profile 的 dependencies、加入 dsh.profile.bundles 并热重载，
      不需要手改 package.json / cordis.patch.yml / node_modules）
-3. 看到结果里 application=applied 后刷新页面，设置页左侧应出现【预设编辑】入口。
+3. 看到结果里 application=applied 后重启 DSH NEXT（宿主插件代码在启动时加载），
+   设置页左侧应出现【预设编辑】入口。
 ```
 
 ### 方式二：从源码目录安装（开发者）
@@ -182,9 +209,9 @@ git clone https://github.com/Td0000000/dsh-preset-editor.git
 
 ## 兼容性说明
 
-- **框架版本**：DeepSeek Harness `0.2.1-rc.2`（`0.2.x` 系列；`engines.dsh: ">=0.2.0-rc.1 <0.3.0"`）。
-- **微内核**：基于 `@deepseek-ai/cordis` `^4.0.1`。
-- **环境要求**：Node.js >= 20。
+- **框架版本**：DeepSeek Harness `0.2.2-rc.1`（DSH NEXT `2.0.22-next`；`engines.dsh: ">=0.2.2-rc.1 <0.3.0"`）。
+- **微内核**：基于 `@deepseek-ai/cordis` `~4.1.0`。
+- **环境要求**：使用桌面版内置 Node（`24.21`）；自行运行 Host 时 Node.js >= `24.9`。
 
 ---
 
