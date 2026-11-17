@@ -54,7 +54,7 @@ function makeFakeContext(options = {}) {
 
   const agents = {
     turnBoundaryOf: (session) => options.boundaryFor?.(session) ?? { openTurnStartSeq: null, lastTurn: 0 },
-    get: () => undefined,
+    get: (id) => (options.agentForSession ? options.agentForSession(id) : undefined),
   };
 
   const host = {
@@ -106,8 +106,8 @@ function makeFakeContext(options = {}) {
     tools: { schemas: () => [] },
   };
 
-  async function emit(event, payload) {
-    for (const handler of handlers.get(event) || []) await handler(payload);
+  async function emit(event, ...args) {
+    for (const handler of handlers.get(event) || []) await handler(...args);
   }
 
   function findRoute(routePath) {
@@ -306,6 +306,69 @@ test("HTTP：POST /projects 保存规则、GET /state 与 /project-default 反�
   });
   assert.equal(missing.status, 400);
   assert.match(missing.json.error, /预设不存在/);
+  fake.cleanup();
+});
+
+test("blank 会话被重置回官方默认时，重新套用目录规则（复用 blank 兜底）", async () => {
+  writeStore({
+    version: 3,
+    presets: { "pi-spider": preset() },
+    projectDefaults: { enabled: true, rules: [{ id: "r1", path: RULE_DIR, presetId: "pi-spider", enabled: true }] },
+  });
+  const session = sessionFor(RULE_DIR);
+  const agent = { id: session.id, session };
+  const fake = makeFakeContext({ agentForSession: () => agent });
+  plugin.apply(fake.ctx);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  // 模拟宿主复用 live blank 会话时把预设重置回官方默认 standard
+  await fake.emit("session/event", session, { type: "agent-preset/selected", data: { agentPreset: "standard" } });
+  await new Promise((resolve) => setTimeout(resolve, 40));
+
+  assert.equal(fake.selectCalls.length, 1);
+  assert.equal(fake.selectCalls[0].presetId, "pi-spider");
+  const state = await fake.call("/dsh-preset-editor/state");
+  assert.equal(state.json.projectRuntime.applied[0].reason, "blank 会话被重置回官方默认，重新套用目录规则");
+  fake.cleanup();
+});
+
+test("用户手选其它预设 / 自己写入规则预设时，兜底不动作", async () => {
+  writeStore({
+    version: 3,
+    presets: { "pi-spider": preset(), other: preset("other", "Other") },
+    projectDefaults: { enabled: true, rules: [{ id: "r1", path: RULE_DIR, presetId: "pi-spider", enabled: true }] },
+  });
+
+  for (const next of ["other", "pi-spider"]) {
+    const session = sessionFor(RULE_DIR);
+    const agent = { id: session.id, session };
+    const fake = makeFakeContext({ agentForSession: () => agent });
+    plugin.apply(fake.ctx);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    await fake.emit("session/event", session, { type: "agent-preset/selected", data: { agentPreset: next } });
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    assert.equal(fake.selectCalls.length, 0, `next=${next}`);
+    fake.cleanup();
+  }
+});
+
+test("非 blank 会话被重置回默认时，兜底不动作（select 会 locked）", async () => {
+  writeStore({
+    version: 3,
+    presets: { "pi-spider": preset() },
+    projectDefaults: { enabled: true, rules: [{ id: "r1", path: RULE_DIR, presetId: "pi-spider", enabled: true }] },
+  });
+  const session = sessionFor(RULE_DIR);
+  const agent = { id: session.id, session };
+  const fake = makeFakeContext({
+    agentForSession: () => agent,
+    boundaryFor: () => ({ openTurnStartSeq: null, lastTurn: 2 }),
+  });
+  plugin.apply(fake.ctx);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  await fake.emit("session/event", session, { type: "agent-preset/selected", data: { agentPreset: "standard" } });
+  await new Promise((resolve) => setTimeout(resolve, 40));
+  assert.equal(fake.selectCalls.length, 0);
   fake.cleanup();
 });
 

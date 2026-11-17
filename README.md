@@ -68,11 +68,12 @@ DeepSeek Harness 自定义预设可视化编辑插件。
 | 总开关关闭 / 目录没配规则 / 规则被停用 | 完全跟随 DSH 官方默认预设（或调用方显式指定的预设） |
 | 规则命中且会话仍是空白（未开始第一轮） | 自动切换到规则预设，效果等同于用户在新会话顶部手动选择 |
 | 用户在新会话顶部手动选择了另一个预设 | 以用户选择为准，规则不覆盖 |
+| New Session 复用同一个 workspace 里**活着的** blank 会话 | 宿主会把它改回官方默认；插件监听到 `agent-preset/selected` 后重新套用目录规则（若用户显式选了别的预设则保持用户选择） |
 | 规则引用的预设被删除 / 挂载失败 | 跳过该规则，回退 DSH 默认预设，并在诊断区记录原因 |
 | 子代理、fork 派生会话（`origin=subagent` / `parentSession` / `isSeeded`） | 继承父级组合，不应用规则 |
 | 已经开始的会话 | 不会中途换预设（DSH 本身也不允许） |
 
-实现方式（只使用官方公开扩展点）：宿主在 `agent/created`（serial 事件，创建返回前）读取 `SessionHeader.cwd`，命中规则且会话空白时调用官方 `ctx.agentPresets.select(agent, presetId)`。选择会按官方规则写入会话日志（`agent-preset/selected`），重启后按 projection 恢复。插件**从不改写** `agent-preset-registry` 的 `default` / `selectedDefault` 配置，因此不会与 DSH 自己的默认预设冲突。
+实现方式（只使用官方公开扩展点）：宿主在 `agent/created`（serial 事件，创建返回前）读取 `SessionHeader.cwd`，命中规则且会话空白时调用官方 `ctx.agentPresets.select(agent, presetId)`。选择会按官方规则写入会话日志（`agent-preset/selected`），重启后按 projection 恢复。另有一个兜底：监听 `session/event`，如果 blank 会话被改回官方默认（典型场景是 New Session 复用活着的 blank 会话），就把目录规则再套回去。插件**从不改写** `agent-preset-registry` 的 `default` / `selectedDefault` 配置，因此不会与 DSH 自己的默认预设冲突。
 
 > 注意：目录匹配是**完全一致**（Windows 不区分大小写、忽略末尾分隔符），不做父目录/子目录继承；需要多个目录时逐条添加。
 >
@@ -169,6 +170,8 @@ DSH NEXT `2.0.22-next` 把内核升级到 `0.2.2-rc.1`（Cordis `4.1.0`）。本
 - 路径大小写不敏感、末尾分隔符不影响匹配；
 - 总开关关闭 / 单条规则停用 → 回退 `minimal`；重新启用 → 恢复规则预设；
 - 全程 `officialDefaultPreset` 保持 `minimal`，插件没有改写 DSH 的默认预设配置。
+
+另外单独复测了 **New Session 复用 live blank 会话**（宿主会把它重置回官方默认）4 组：目录 A/B 复用后会重新套回 `test-alpha`/`test-beta`，未配置目录复用保持 `minimal`。测试用的建会话入口是临时 dev 路由，测试完成后已从正式构建删除。
 
 ### 为什么必须每次注入（抗压缩）
 
