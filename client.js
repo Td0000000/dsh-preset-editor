@@ -285,6 +285,10 @@ window.__ModuleLoader__.load({
       const [projectRuntime, setProjectRuntime] = useState(null);
       const [newRule, setNewRule] = useState({ path: "", presetId: "", enabled: true });
       const [projectBusy, setProjectBusy] = useState(false);
+      // 预设名册（自定义 + 官方内置）与上游模型目录
+      const [presetRoster, setPresetRoster] = useState([]);
+      const [modelCatalog, setModelCatalog] = useState(null);
+      const [modelBusy, setModelBusy] = useState(false);
 
       const fileInputRef = useRef(null);
 
@@ -298,6 +302,7 @@ window.__ModuleLoader__.load({
               setDoc(d.doc);
               setProjectInfo(d.projectDefaultsInfo || null);
               setProjectRuntime(d.projectRuntime || null);
+              setPresetRoster(d.presetRoster || []);
             } else {
               setNotice({ kind: "error", text: "读取预设失败: " + (d.error || "") });
             }
@@ -324,6 +329,7 @@ window.__ModuleLoader__.load({
               setDoc(d.doc);
               setProjectInfo(d.projectDefaultsInfo || null);
               setProjectRuntime(d.projectRuntime || null);
+              setPresetRoster(d.presetRoster || []);
               setProjectDraft(cloneProjectDefaults(d.doc && d.doc.projectDefaults));
             } else {
               setNotice({ kind: "error", text: "读取项目默认预设失败: " + (d.error || "") });
@@ -347,10 +353,27 @@ window.__ModuleLoader__.load({
           .catch(() => {});
       }, []);
 
+      // 加载当前 DSH 已配置上游的模型目录（用于预设绑定默认模型）
+      const loadModels = useCallback(() => {
+        setModelBusy(true);
+        fetch("/dsh-preset-editor/models", { cache: "no-store" })
+          .then((r) => r.json())
+          .then((d) => {
+            if (d.ok) {
+              setModelCatalog(d);
+            } else {
+              setNotice({ kind: "error", text: "读取模型目录失败: " + (d.error || "") });
+            }
+          })
+          .catch((e) => setNotice({ kind: "error", text: "读取模型目录失败: " + e.message }))
+          .finally(() => setModelBusy(false));
+      }, []);
+
       useEffect(() => {
         loadState();
         loadTools();
-      }, [loadState, loadTools]);
+        loadModels();
+      }, [loadState, loadTools, loadModels]);
 
       // 提示清理计时器
       useEffect(() => {
@@ -363,10 +386,12 @@ window.__ModuleLoader__.load({
       // 进入新建预设页面
       const handleOpenCreate = () => {
         const defaultToolIds = allTools.filter((t) => t.defaultEnabled).map((t) => t.id);
+        loadModels();
         setDraft({
           id: "",
           name: "",
           description: "",
+          model: null,
           enabledTools: defaultToolIds.length > 0 ? defaultToolIds : ["time-context", "tool-bash", "tool-pwsh", "tool-fs", "tool-fs-search", "tool-jobs", "tool-web", "tool-skill", "tool-ask-user", "tool-todo", "tool-present", "tool-goal", "plan-mode", "tool-subagent", "tool-schedule", "compaction"],
           // 顶级第一条必须是 system 且为启用状态
           entries: [
@@ -387,6 +412,8 @@ window.__ModuleLoader__.load({
           copy.entries[0].role = "system";
           copy.entries[0].enabled = true;
         }
+        if (!copy.model || typeof copy.model !== "object") copy.model = null;
+        loadModels();
         setDraft(copy);
         setView("edit");
         setNotice({ kind: "idle", text: "" });
@@ -446,11 +473,29 @@ window.__ModuleLoader__.load({
           return;
         }
 
+        // 默认模型绑定校验：要么不绑定，要么 provider + model 都有
+        const boundModel =
+          draft.model && draft.model.provider && draft.model.model
+            ? {
+                provider: draft.model.provider,
+                model: draft.model.model,
+                ...(draft.model.reasoningEffort
+                  ? { reasoningEffort: draft.model.reasoningEffort }
+                  : {}),
+              }
+            : null;
+        if (draft.model && (draft.model.provider || draft.model.model) && !boundModel) {
+          setNotice({ kind: "error", text: "默认模型需要同时选择上游与模型，或清空绑定。" });
+          return;
+        }
+
         setBusy(true);
         fetch("/dsh-preset-editor/save", {
           method: "POST",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ preset: { ...draft, id: idClean } }),
+          body: JSON.stringify({
+            preset: { ...draft, id: idClean, model: boundModel },
+          }),
         })
           .then((r) => r.json())
           .then((d) => {
@@ -820,6 +865,14 @@ window.__ModuleLoader__.load({
                     style: S.badge("rgba(59, 130, 246, 0.15)", THEME.accent),
                   }, `${toolCount} 个工具`),
                 ),
+                // 默认模型绑定
+                p.model && p.model.provider && p.model.model
+                  ? h("div", { style: { display: "flex", gap: "6px", alignItems: "center", flexWrap: "wrap" } },
+                      h("span", { style: S.badge("rgba(245, 158, 11, 0.15)", THEME.warning) }, "默认模型"),
+                      h("code", { style: { fontSize: "11px", color: THEME.muted, fontFamily: "monospace", wordBreak: "break-all" } },
+                        p.model.provider + "/" + p.model.model + (p.model.reasoningEffort ? " · " + p.model.reasoningEffort : "")),
+                    )
+                  : null,
                 // 描述
                 p.description ? h("p", {
                   style: {
@@ -890,7 +943,24 @@ window.__ModuleLoader__.load({
         const info = projectInfo || {};
         const infoById = {};
         for (const row of Array.isArray(info.rules) ? info.rules : []) infoById[row.id] = row;
-        const presetOptions = presetsList.map((p) => ({ id: p.id, name: p.name || p.id }));
+        // 预设选项 = 当前 DSH 名册（自定义 + 官方内置）；名册为空时退回本地预设
+        const rosterRows = Array.isArray(presetRoster) && presetRoster.length > 0
+          ? presetRoster
+          : presetsList.map((p) => ({ id: p.id, name: p.name || p.id, source: "custom" }));
+        const presetOptions = rosterRows.map((row) => ({
+          id: row.id,
+          name: row.name || row.id,
+          source: row.source || "custom",
+          broken: row.broken || null,
+          isDefault: row.isDefault === true,
+        }));
+        const optionLabel = (option) =>
+          (option.source === "official" ? "【官方】" : "【自定义】") +
+          (option.name || option.id) +
+          "（" +
+          option.id +
+          "）" +
+          (option.broken ? " ⚠挂载失败" : "");
         const checkbox = {
           width: "16px",
           height: "16px",
@@ -907,10 +977,16 @@ window.__ModuleLoader__.load({
           const runtimeInfo = infoById[rule.id] || rule;
           const missingPreset = runtimeInfo.presetExists === false;
           const notRegistered = runtimeInfo.presetExists === true && runtimeInfo.presetRegistered === false;
+          const brokenPreset = Boolean(runtimeInfo.presetBroken);
           const missingPath = runtimeInfo.pathExists === false;
           const options = presetOptions.slice();
           if (!options.some((option) => option.id === rule.presetId)) {
-            options.push({ id: rule.presetId, name: rule.presetId + "（已不存在）" });
+            options.push({
+              id: rule.presetId,
+              name: rule.presetId + "（已不存在）",
+              source: runtimeInfo.presetSource || "custom",
+              broken: null,
+            });
           }
           return h("div", {
             key: rule.id || "rule-" + index,
@@ -958,14 +1034,15 @@ window.__ModuleLoader__.load({
                 onChange: (e) => updateProjectRule(index, { presetId: e.target.value }),
               },
                 options.map((option) => h("option", { key: option.id, value: option.id },
-                  option.name + "（" + option.id + "）")),
+                  optionLabel(option))),
               ),
             ),
-            missingPreset || notRegistered || missingPath
+            missingPreset || notRegistered || brokenPreset || missingPath
               ? h("div", { style: Object.assign({}, S.warningBanner, { fontSize: "12px", alignItems: "flex-start" }) },
                   h("span", null,
                     missingPreset ? "⚠ 预设已不存在，本规则不会生效（回退 DSH 默认预设）。 " : "",
-                    notRegistered ? "⚠ 预设当前挂载失败，本规则不会生效。 " : "",
+                    brokenPreset ? "⚠ 预设当前挂载失败（broken），本规则不会生效。 " : "",
+                    notRegistered ? "⚠ 预设当前未注册成功，本规则不会生效。 " : "",
                     missingPath ? "⚠ 该目录当前不存在；首次在该目录新建会话时 DSH 会自动创建它。" : "",
                   ),
                 )
@@ -989,7 +1066,7 @@ window.__ModuleLoader__.load({
               }, projectDraft.enabled ? "总开关：已开启" : "总开关：已关闭"),
             ),
             h("div", { style: { display: "flex", gap: "18px", flexWrap: "wrap", fontSize: "12px", color: THEME.muted } },
-              h("span", null, "DSH 当前默认预设：", h("b", { style: { color: THEME.ink } }, info.officialDefaultPreset || "（未知）")),
+              h("span", null, "DSH 当前默认预设：", h("b", { style: { color: THEME.ink } }, (info.officialDefaultName ? info.officialDefaultName + "（" + info.officialDefaultPreset + "）" : null) || info.officialDefaultPreset || "（未知）")),
               h("span", null, "规则数量：" + projectDraft.rules.length),
               h("span", null, "匹配方式：目录完全一致（Windows 不区分大小写）"),
             ),
@@ -1014,7 +1091,7 @@ window.__ModuleLoader__.load({
               },
                 h("option", { value: "" }, "选择预设…"),
                 presetOptions.map((option) => h("option", { key: option.id, value: option.id },
-                  option.name + "（" + option.id + "）")),
+                  optionLabel(option))),
               ),
               h("label", { style: { display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "12px", color: THEME.muted } },
                 h("input", {
@@ -1459,6 +1536,137 @@ window.__ModuleLoader__.load({
               }),
             ),
           ),
+
+          // 默认模型绑定（可选）：预设生效且会话尚未显式选择模型时套用
+          (() => {
+            const providers = (modelCatalog && modelCatalog.providers) || [];
+            const bound = draft.model && typeof draft.model === "object" ? draft.model : null;
+            const boundProviderId = bound && bound.provider ? bound.provider : "";
+            const providerEntry = providers.find((p) => p.id === boundProviderId);
+            const modelOptions = providerEntry ? providerEntry.models || [] : [];
+            const modelEntry = modelOptions.find((m) => m.id === (bound && bound.model));
+            const effortOptions =
+              (modelEntry && modelEntry.reasoning && modelEntry.reasoning.efforts) || [];
+            const setModel = (next) => updateDraftField("model", next);
+            const defaultSelection =
+              (modelCatalog && modelCatalog.default) || null;
+            const labelStyle = {
+              display: "block",
+              fontSize: "12px",
+              color: THEME.muted,
+              marginBottom: "5px",
+            };
+            return h("div", { style: S.card },
+              h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "8px" } },
+                h("div", { style: { flex: 1, minWidth: "260px" } },
+                  h("div", { style: { fontSize: "14px", fontWeight: 650, color: THEME.ink } }, "默认模型与思考强度（可选）"),
+                  h("div", { style: { fontSize: "12px", color: THEME.muted, marginTop: "4px", lineHeight: 1.6 } },
+                    "当会话使用这个预设、且还没有显式选择模型时，自动切换到这里的上游模型 / 思考强度。模型列表来自 DSH 当前已配置的上游。",
+                    defaultSelection
+                      ? "（DSH 当前默认：" +
+                        defaultSelection.provider +
+                        "/" +
+                        defaultSelection.model +
+                        (defaultSelection.reasoningEffort
+                          ? " · " + defaultSelection.reasoningEffort
+                          : "") +
+                        "）"
+                      : "",
+                  ),
+                ),
+                h("div", { style: { display: "flex", gap: "8px", alignItems: "center" } },
+                  modelBusy
+                    ? h("span", { style: { fontSize: "12px", color: THEME.muted } }, "读取模型目录…")
+                    : null,
+                  h("button", { style: S.btnSecondary, onClick: loadModels }, "刷新模型"),
+                  bound ? h("button", { style: S.btnSecondary, onClick: () => setModel(null) }, "清空绑定") : null,
+                ),
+              ),
+              h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))", gap: "12px" } },
+                h("div", null,
+                  h("label", { style: labelStyle }, "上游 Provider"),
+                  h("select", {
+                    style: S.input,
+                    value: boundProviderId,
+                    onChange: (e) => {
+                      const providerId = e.target.value;
+                      if (!providerId) {
+                        setModel(null);
+                        return;
+                      }
+                      const firstModel =
+                        (providers.find((p) => p.id === providerId) || {}).models?.[0];
+                      setModel(
+                        firstModel
+                          ? { provider: providerId, model: firstModel.id }
+                          : { provider: providerId, model: "" },
+                      );
+                    },
+                  },
+                    h("option", { value: "" }, "不绑定（跟随 DSH 默认）"),
+                    providers.map((p) => h("option", { key: p.id, value: p.id },
+                      (p.name || p.id) + "（" + p.id + "）")),
+                  ),
+                ),
+                h("div", null,
+                  h("label", { style: labelStyle }, "模型"),
+                  h("select", {
+                    style: S.input,
+                    value: (bound && bound.model) || "",
+                    disabled: !providerEntry,
+                    onChange: (e) => {
+                      const modelId = e.target.value;
+                      if (!modelId) {
+                        setModel(bound ? { ...bound, model: "" } : null);
+                        return;
+                      }
+                      const entry = modelOptions.find((m) => m.id === modelId);
+                      const defaultEffortClass =
+                        entry && entry.reasoning && entry.reasoning.defaultEffort
+                          ? entry.reasoning.defaultEffort
+                          : "";
+                      setModel({
+                        provider: boundProviderId,
+                        model: modelId,
+                        ...(defaultEffortClass
+                          ? { reasoningEffort: defaultEffortClass }
+                          : {}),
+                      });
+                    },
+                  },
+                    h("option", { value: "" }, providerEntry ? "选择模型…" : "先选择上游"),
+                    modelOptions.map((m) => h("option", { key: m.id, value: m.id },
+                      (m.name || m.id) + "（" + m.id + "）")),
+                  ),
+                ),
+                h("div", null,
+                  h("label", { style: labelStyle }, "思考强度"),
+                  h("select", {
+                    style: S.input,
+                    value: (bound && bound.reasoningEffort) || "",
+                    disabled: effortOptions.length === 0,
+                    onChange: (e) => {
+                      const effort = e.target.value;
+                      setModel({
+                        provider: boundProviderId,
+                        model: (bound && bound.model) || "",
+                        ...(effort ? { reasoningEffort: effort } : {}),
+                      });
+                    },
+                  },
+                    h("option", { value: "" },
+                      effortOptions.length ? "跟随模型默认" : "该模型无思考强度选项"),
+                    effortOptions.map((effort) => h("option", { key: effort.id, value: effort.id },
+                      (effort.name || effort.id) + "（" + effort.id + "）")),
+                  ),
+                ),
+              ),
+              modelCatalog && bound && (!providerEntry || !modelEntry)
+                ? h("div", { style: Object.assign({}, S.warningBanner, { fontSize: "12px" }) },
+                    "当前绑定的上游 / 模型已不在 DSH 模型目录里；运行时会跳过绑定并回退会话当前模型，建议重新选择。")
+                : null,
+            );
+          })(),
 
           // 消息条目编排区域
           h("div", { style: { display: "flex", flexDirection: "column", gap: "12px" } },

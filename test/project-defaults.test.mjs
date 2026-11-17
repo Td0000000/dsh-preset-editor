@@ -135,6 +135,70 @@ test("损坏的存储文件不会被 projectDefaults 保存覆盖", async () => 
   assert.equal(fs.readFileSync(storeFile(), "utf8"), "{not json");
 });
 
+test("normalizePreset：保留默认模型绑定，非法绑定丢弃", () => {
+  const withModel = core.normalizePreset({
+    ...samplePreset(),
+    model: { provider: "opencode-go", model: "deepseek-v4.1-flash", reasoningEffort: "high" },
+  });
+  assert.deepEqual(withModel.model, {
+    provider: "opencode-go",
+    model: "deepseek-v4.1-flash",
+    reasoningEffort: "high",
+  });
+  const noEffort = core.normalizePreset({
+    ...samplePreset(),
+    model: { provider: "p", model: "m" },
+  });
+  assert.deepEqual(noEffort.model, { provider: "p", model: "m" });
+  const invalid = core.normalizePreset({ ...samplePreset(), model: { provider: "p" } });
+  assert.equal("model" in invalid, false);
+});
+
+test("savePreset / loadPresetsDoc 不丢预设的默认模型", async () => {
+  writeDoc({ version: 3, presets: {} });
+  await core.savePreset({
+    ...samplePreset("with-model"),
+    model: { provider: "p", model: "m", reasoningEffort: "low" },
+  });
+  const doc = core.loadPresetsDoc();
+  assert.deepEqual(doc.presets["with-model"].model, {
+    provider: "p",
+    model: "m",
+    reasoningEffort: "low",
+  });
+});
+
+test("saveProjectDefaults：允许官方预设（isPresetAvailable 回调）", async () => {
+  writeDoc({ version: 3, presets: { "pi-spider": samplePreset() } });
+  const dir = path.resolve(tmpHome, "official");
+  const saved = await core.saveProjectDefaults(
+    { enabled: true, rules: [{ path: dir, presetId: "minimal" }] },
+    { isPresetAvailable: (id) => id === "minimal" || id === "pi-spider" },
+  );
+  assert.equal(saved.projectDefaults.rules[0].presetId, "minimal");
+  await assert.rejects(
+    core.saveProjectDefaults(
+      { enabled: true, rules: [{ path: dir, presetId: "ghost" }] },
+      { isPresetAvailable: (id) => id === "minimal" },
+    ),
+    /不存在或不可用/,
+  );
+});
+
+test("importPresetData：整体备份里的官方预设规则需要 isPresetAvailable 放行", async () => {
+  writeDoc({ version: 3, presets: { "pi-spider": samplePreset() } });
+  const dir = path.resolve(tmpHome, "imported-official");
+  const data = {
+    presets: { "pi-spider": samplePreset() },
+    projectDefaults: { enabled: true, rules: [{ path: dir, presetId: "minimal" }] },
+  };
+  await assert.rejects(core.importPresetData(data), /不存在的预设/);
+  const doc = await core.importPresetData(data, {
+    isPresetAvailable: (id) => id === "minimal" || id === "pi-spider",
+  });
+  assert.equal(doc.projectDefaults.rules[0].presetId, "minimal");
+});
+
 test.after(() => {
   fs.rmSync(tmpHome, { recursive: true, force: true });
 });

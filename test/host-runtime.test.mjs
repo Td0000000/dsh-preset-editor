@@ -15,7 +15,7 @@ const plugin = await import("../lib/index.js");
 const RULE_DIR = path.resolve(tmpHome, "project-a");
 const OTHER_DIR = path.resolve(tmpHome, "project-b");
 
-function preset(id = "pi-spider", name = "Pi 蜘蛛") {
+function preset(id = "pi-spider", name = "Pi 蜘蛛", model = undefined) {
   return {
     id,
     name,
@@ -23,6 +23,7 @@ function preset(id = "pi-spider", name = "Pi 蜘蛛") {
     order: 100,
     enabledTools: ["time-context"],
     entries: [{ id: "e-1", role: "system", text: "system prompt", enabled: true }],
+    ...(model ? { model } : {}),
   };
 }
 
@@ -35,19 +36,37 @@ function makeFakeContext(options = {}) {
   const routes = [];
   const cleanups = [];
   const selectCalls = [];
+  const modelSelections = [];
+  const selectedBySession = new Map();
   const defaultId = options.defaultId ?? "standard";
   const currentPreset = options.currentPreset; // (session) => string | null
+  const rosterRows = options.roster ?? [
+    { id: "pi-spider", name: "Pi 蜘蛛", order: 100 },
+    { id: "standard", name: "standard", order: 10 },
+    { id: "minimal", name: "极简", order: 20 },
+  ];
+  const knownPresetIds = new Set(rosterRows.map((row) => row.id));
 
   const agentPresets = {
     get defaultId() {
       return defaultId;
     },
     register: async () => async () => {},
-    resolve: async (id) => ({ id: id ?? defaultId }),
+    resolve: async (id) => {
+      const wanted = id ?? defaultId;
+      if (options.unknownPresets?.includes(wanted) || !knownPresetIds.has(wanted)) {
+        throw new Error("Unknown agent preset: " + wanted);
+      }
+      return { id: wanted };
+    },
+    list: async () => rosterRows,
     composedPreset: () => undefined,
-    presetForSession: (session) => (currentPreset ? currentPreset(session) : defaultId),
+    presetForSession: (session) =>
+      selectedBySession.get(String(session?.id)) ??
+      (currentPreset ? currentPreset(session) : defaultId),
     select: async (agent, id) => {
       selectCalls.push({ sessionId: String(agent?.session?.id), presetId: id });
+      if (agent?.session?.id !== undefined) selectedBySession.set(String(agent.session.id), id);
       return id;
     },
   };
@@ -55,6 +74,19 @@ function makeFakeContext(options = {}) {
   const agents = {
     turnBoundaryOf: (session) => options.boundaryFor?.(session) ?? { openTurnStartSeq: null, lastTurn: 0 },
     get: (id) => (options.agentForSession ? options.agentForSession(id) : undefined),
+  };
+
+  const sessionProjections = options.sessionProjections ?? {
+    snapshot: () => ({ values: { modelSelection: null } }),
+  };
+
+  const llm = {
+    stream: () => (async function* () {})(),
+    resolveCallConfig: async (config) => {
+      const key = config.provider + "/" + config.model;
+      if (options.unavailableModels?.includes(key)) throw new Error("model unavailable: " + key);
+      return config;
+    },
   };
 
   const host = {
@@ -98,11 +130,12 @@ function makeFakeContext(options = {}) {
     get: (name) => {
       if (name === "profileContext") return undefined;
       if (name === "webServer") return host;
+      if (name === "sessionProjections") return sessionProjections;
       return undefined;
     },
     agentPresets,
     agents,
-    llm: { stream: () => (async function* () {})() },
+    llm,
     tools: { schemas: () => [] },
   };
 
@@ -145,6 +178,7 @@ function makeFakeContext(options = {}) {
     handlers,
     routes,
     selectCalls,
+    modelSelections,
     emit,
     call,
     cleanup: () => {
@@ -369,6 +403,219 @@ test("非 blank 会话被重置回默认时，兜底不动作（select 会 locke
   await fake.emit("session/event", session, { type: "agent-preset/selected", data: { agentPreset: "standard" } });
   await new Promise((resolve) => setTimeout(resolve, 40));
   assert.equal(fake.selectCalls.length, 0);
+  fake.cleanup();
+});
+
+test("官方内置预设可以作为目录规则目标，并真实调用 select", async () => {
+  writeStore({
+    version: 3,
+    presets: { "pi-spider": preset() },
+    projectDefaults: {
+      enabled: true,
+      rules: [{ id: "r1", path: RULE_DIR, presetId: "standard", enabled: true }],
+    },
+  });
+  const fake = makeFakeContext({ defaultId: "minimal" });
+  plugin.apply(fake.ctx);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  const session = sessionFor(RULE_DIR);
+  await fake.emit("agent/created", { agent: { id: session.id, session }, source: "startup" });
+
+  assert.equal(fake.selectCalls.length, 1);
+  assert.equal(fake.selectCalls[0].presetId, "standard");
+
+  const state = await fake.call("/dsh-preset-editor/state");
+  const roster = state.json.presetRoster;
+  assert.equal(roster.find((row) => row.id === "standard")?.source, "official");
+  assert.equal(roster.find((row) => row.id === "pi-spider")?.source, "custom");
+  assert.equal(
+    state.json.projectDefaultsInfo.rules[0].presetSource,
+    "official",
+    "规则应识别为官方预设",
+  );
+  fake.cleanup();
+});
+
+test("预设绑定的默认模型会在会话创建（规则套用预设后）写入会话", async () => {
+  writeStore({
+    version: 3,
+    presets: {
+      "pi-spider": preset("pi-spider", "Pi 蜘蛛", {
+        provider: "opencode-go",
+        model: "deepseek-v4.1-flash",
+        reasoningEffort: "high",
+      }),
+    },
+    projectDefaults: {
+      enabled: true,
+      rules: [{ id: "r1", path: RULE_DIR, presetId: "pi-spider", enabled: true }],
+    },
+  });
+  const session = sessionFor(RULE_DIR);
+  const agent = { id: session.id, session, model: { select: (selection) => fake.modelSelections.push(selection) } };
+  const fake = makeFakeContext({ agentForSession: () => agent });
+  plugin.apply(fake.ctx);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  await fake.emit("agent/created", { agent, source: "startup" });
+
+  assert.equal(fake.selectCalls.length, 1, "目录规则应先切到 pi-spider");
+  assert.deepEqual(fake.modelSelections, [
+    { provider: "opencode-go", model: "deepseek-v4.1-flash", reasoningEffort: "high" },
+  ]);
+  const state = await fake.call("/dsh-preset-editor/state");
+  assert.ok(
+    state.json.projectRuntime.applied.some((row) => row.kind === "model"),
+    "诊断里应有模型套用记录",
+  );
+  fake.cleanup();
+});
+
+test("会话已有显式模型选择时，不覆盖预设绑定模型", async () => {
+  writeStore({
+    version: 3,
+    presets: {
+      "pi-spider": preset("pi-spider", "Pi 蜘蛛", {
+        provider: "opencode-go",
+        model: "deepseek-v4.1-flash",
+      }),
+    },
+    projectDefaults: {
+      enabled: true,
+      rules: [{ id: "r1", path: RULE_DIR, presetId: "pi-spider", enabled: true }],
+    },
+  });
+  const session = sessionFor(RULE_DIR);
+  const agent = { id: session.id, session, model: { select: (selection) => fake.modelSelections.push(selection) } };
+  const fake = makeFakeContext({
+    agentForSession: () => agent,
+    sessionProjections: {
+      snapshot: () => ({
+        values: { modelSelection: { lastUsed: { provider: "x", model: "y" }, next: null } },
+      }),
+    },
+  });
+  plugin.apply(fake.ctx);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  await fake.emit("agent/created", { agent, source: "startup" });
+
+  assert.equal(fake.modelSelections.length, 0);
+  fake.cleanup();
+});
+
+test("预设绑定的模型不可用时跳过并记录诊断", async () => {
+  writeStore({
+    version: 3,
+    presets: {
+      "pi-spider": preset("pi-spider", "Pi 蜘蛛", {
+        provider: "opencode-go",
+        model: "gone-model",
+      }),
+    },
+    projectDefaults: {
+      enabled: true,
+      rules: [{ id: "r1", path: RULE_DIR, presetId: "pi-spider", enabled: true }],
+    },
+  });
+  const session = sessionFor(RULE_DIR);
+  const agent = { id: session.id, session, model: { select: (selection) => fake.modelSelections.push(selection) } };
+  const fake = makeFakeContext({
+    agentForSession: () => agent,
+    unavailableModels: ["opencode-go/gone-model"],
+  });
+  plugin.apply(fake.ctx);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  await fake.emit("agent/created", { agent, source: "startup" });
+
+  assert.equal(fake.modelSelections.length, 0);
+  const state = await fake.call("/dsh-preset-editor/state");
+  assert.ok(
+    state.json.projectRuntime.skipped.some((row) => /模型不可用/.test(row.reason)),
+    "诊断里应有模型不可用记录",
+  );
+  fake.cleanup();
+});
+
+test("用户手选自定义预设（agent-preset/selected）后也会套用绑定的默认模型", async () => {
+  writeStore({
+    version: 3,
+    presets: {
+      "pi-spider": preset("pi-spider", "Pi 蜘蛛", {
+        provider: "opencode-go",
+        model: "deepseek-v4.1-flash",
+        reasoningEffort: "low",
+      }),
+    },
+    projectDefaults: { enabled: false, rules: [] },
+  });
+  const session = sessionFor(RULE_DIR);
+  const agent = { id: session.id, session, model: { select: (selection) => fake.modelSelections.push(selection) } };
+  const currentRef = { value: "standard" };
+  const fake = makeFakeContext({
+    agentForSession: () => agent,
+    currentPreset: () => currentRef.value,
+  });
+  plugin.apply(fake.ctx);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  // 模拟官方客户端手选预设后，会话 projection 已经更新为 pi-spider
+  currentRef.value = "pi-spider";
+  await fake.emit("session/event", session, {
+    type: "agent-preset/selected",
+    data: { agentPreset: "pi-spider" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 50));
+
+  assert.equal(fake.selectCalls.length, 0, "未开启目录规则，不应再切预设");
+  assert.deepEqual(fake.modelSelections, [
+    { provider: "opencode-go", model: "deepseek-v4.1-flash", reasoningEffort: "low" },
+  ]);
+  fake.cleanup();
+});
+
+test("HTTP /projects 允许保存官方预设规则，未知预设仍拒绝", async () => {
+  writeStore({
+    version: 3,
+    presets: { "pi-spider": preset() },
+    projectDefaults: { enabled: false, rules: [] },
+  });
+  const fake = makeFakeContext({
+    roster: [
+      { id: "pi-spider", name: "Pi 蜘蛛", order: 100 },
+      { id: "standard", name: "standard", order: 10 },
+      { id: "minimal", name: "极简", order: 20 },
+    ],
+  });
+  plugin.apply(fake.ctx);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  const official = await fake.call("/dsh-preset-editor/projects", {
+    method: "POST",
+    body: {
+      projectDefaults: {
+        enabled: true,
+        rules: [{ id: "r1", path: RULE_DIR, presetId: "standard", enabled: true }],
+      },
+    },
+  });
+  assert.equal(official.status, 200, JSON.stringify(official.json));
+  assert.equal(official.json.ok, true);
+  assert.equal(official.json.projectDefaultsInfo.rules[0].presetSource, "official");
+
+  const unknown = await fake.call("/dsh-preset-editor/projects", {
+    method: "POST",
+    body: {
+      projectDefaults: {
+        enabled: true,
+        rules: [{ id: "r2", path: OTHER_DIR, presetId: "ghost-preset", enabled: true }],
+      },
+    },
+  });
+  assert.equal(unknown.status, 400);
+  assert.match(unknown.json.error, /不存在或不可用/);
   fake.cleanup();
 });
 

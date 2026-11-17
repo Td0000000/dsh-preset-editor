@@ -1,6 +1,6 @@
 {
   "meta": {
     "title": "Preset Editor",
-    "description": "Create and edit custom agent presets: SYS/USER/ASSISTANT message orchestration, officially localized AI tools, runtime tool awareness, template-variable validation, and per-project-folder default presets."
+    "description": "Create and edit custom agent presets: SYS/USER/ASSISTANT message orchestration, officially localized AI tools, runtime tool awareness, template-variable validation, per-project-folder default presets (custom or official), and per-preset default upstream model with reasoning effort."
   }
 }
