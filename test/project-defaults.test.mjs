@@ -38,20 +38,33 @@ test("normalizeProjectPath：拒绝相对路径，接受绝对路径并去掉引
   assert.equal(core.normalizeProjectPath(abs + path.sep), abs);
 });
 
-test("findProjectRule：完全匹配、忽略大小写与末尾分隔符", () => {
+test("findProjectRule：文件夹本身 + 子文件夹继承，就近规则优先", () => {
   const dir = path.resolve(tmpHome, "ProjOne");
+  const child = path.join(dir, "sub");
+  const grandChild = path.join(child, "deep");
   const defaults = {
     enabled: true,
     rules: [
       { id: "r1", path: dir, presetId: "pi-spider", enabled: true },
       { id: "r2", path: path.resolve(tmpHome, "other"), presetId: "pi-spider", enabled: false },
+      { id: "r3", path: child, presetId: "child-preset", enabled: true },
     ],
   };
   assert.equal(core.findProjectRule(defaults, dir)?.id, "r1");
   assert.equal(core.findProjectRule(defaults, dir.toUpperCase())?.id, "r1");
   assert.equal(core.findProjectRule(defaults, dir + path.sep)?.id, "r1");
-  assert.equal(core.findProjectRule(defaults, path.join(dir, "sub")), undefined);
+  assert.equal(core.findProjectRule(defaults, child)?.id, "r3", "子文件夹命中更具体的规则");
+  assert.equal(core.findProjectRule(defaults, grandChild)?.id, "r3", "孙目录继承就近规则");
   assert.equal(core.findProjectRule(defaults, path.resolve(tmpHome, "other")), undefined, "禁用规则不命中");
+  assert.equal(core.findProjectRule(defaults, path.resolve(tmpHome, "ProjOneSibling")), undefined, "不能误匹配相邻目录");
+  // 关掉“包含子文件夹”的规则只匹配自己
+  const exactOnly = path.resolve(tmpHome, "exact-only");
+  const exactDefaults = {
+    enabled: true,
+    rules: [{ id: "r4", path: exactOnly, presetId: "x", enabled: true, subfolders: false }],
+  };
+  assert.equal(core.findProjectRule(exactDefaults, exactOnly)?.id, "r4");
+  assert.equal(core.findProjectRule(exactDefaults, path.join(exactOnly, "sub")), undefined);
   assert.equal(core.findProjectRule(defaults, ""), undefined);
 });
 
@@ -199,38 +212,46 @@ test("importPresetData：整体备份里的官方预设规则需要 isPresetAvai
   assert.equal(doc.projectDefaults.rules[0].presetId, "minimal");
 });
 
-test("presetModels：官方预设也能存默认模型绑定，自定义 model 优先", async () => {
-  writeDoc({ version: 3, presets: { "pi-spider": samplePreset() } });
+test("presetModels / 自定义预设模型绑定：官方写映射，自定义写回预设自身", async () => {
+  writeDoc({
+    version: 3,
+    presets: { "pi-spider": samplePreset(), "custom-a": samplePreset("custom-a") },
+  });
+  // 官方预设：写入 presetModels
   await core.savePresetModel(
     "minimal",
     { provider: "opencode-go", model: "claude-haiku-5-5", reasoningEffort: "medium" },
-    { isPresetAvailable: (id) => id === "minimal" || id === "pi-spider" },
+    { isPresetAvailable: (id) => id === "minimal" || id === "custom-a" || id === "pi-spider" },
   );
   let doc = core.loadPresetsDoc();
-  assert.deepEqual(core.findPresetModelBinding(doc, "minimal"), {
+  assert.deepEqual(doc.presetModels.minimal, {
     provider: "opencode-go",
     model: "claude-haiku-5-5",
     reasoningEffort: "medium",
   });
+  assert.deepEqual(core.findPresetModelBinding(doc, "minimal"), doc.presetModels.minimal);
   assert.equal(core.findPresetModelBinding(doc, "unknown-preset"), undefined);
 
-  // 自定义预设自身的 model 优先于 presetModels
-  await core.savePreset({
-    ...samplePreset("with-model"),
-    model: { provider: "custom-provider", model: "custom-model" },
-  });
+  // 自定义预设：写入 preset.model（预设编辑页与列表入口共用同一个存储）
   await core.savePresetModel(
-    "with-model",
-    { provider: "map-provider", model: "map-model" },
+    "custom-a",
+    { provider: "cpa", model: "nvidia-glm-5.3-flash", reasoningEffort: "high" },
     { isPresetAvailable: () => true },
   );
   doc = core.loadPresetsDoc();
-  assert.deepEqual(core.findPresetModelBinding(doc, "with-model"), {
-    provider: "custom-provider",
-    model: "custom-model",
+  assert.deepEqual(doc.presets["custom-a"].model, {
+    provider: "cpa",
+    model: "nvidia-glm-5.3-flash",
+    reasoningEffort: "high",
   });
+  assert.equal(doc.presetModels["custom-a"], undefined);
 
-  // 清除
+  // 清除自定义绑定
+  await core.savePresetModel("custom-a", null, { isPresetAvailable: () => true });
+  doc = core.loadPresetsDoc();
+  assert.equal(core.findPresetModelBinding(doc, "custom-a"), undefined);
+
+  // 清除官方绑定
   await core.savePresetModel("minimal", null, { isPresetAvailable: () => true });
   doc = core.loadPresetsDoc();
   assert.equal(core.findPresetModelBinding(doc, "minimal"), undefined);

@@ -222,6 +222,34 @@ test("agent/created：命中规则 + blank + 默认预设 -> 调用 select，并
   fake.cleanup();
 });
 
+test("子文件夹继承目录规则：越具体的规则优先（父规则 + 子规则）", async () => {
+  const childDir = path.resolve(RULE_DIR, "sub");
+  const deepDir = path.resolve(childDir, "deep");
+  writeStore({
+    version: 3,
+    presets: { "pi-spider": preset(), child: preset("child", "Child") },
+    projectDefaults: {
+      enabled: true,
+      rules: [
+        { id: "parent", path: RULE_DIR, presetId: "pi-spider", enabled: true },
+        { id: "child", path: childDir, presetId: "child", enabled: true },
+      ],
+    },
+  });
+  const fake = makeFakeContext();
+  plugin.apply(fake.ctx);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+
+  const parentSession = sessionFor(path.resolve(RULE_DIR, "other-sub"));
+  await fake.emit("agent/created", { agent: { id: parentSession.id, session: parentSession } });
+  assert.equal(fake.selectCalls.at(-1).presetId, "pi-spider", "普通子目录走父规则");
+
+  const deepSession = sessionFor(deepDir);
+  await fake.emit("agent/created", { agent: { id: deepSession.id, session: deepSession } });
+  assert.equal(fake.selectCalls.at(-1).presetId, "child", "深层子目录命中更具体的子规则");
+  fake.cleanup();
+});
+
 test("总开关关闭 / 目录未命中 / 规则停用：不 select", async () => {
   const base = {
     version: 3,

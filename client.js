@@ -263,8 +263,8 @@ window.__ModuleLoader__.load({
       URL.revokeObjectURL(url);
     }
 
-    // 官方内置预设的默认模型绑定行（官方预设定义只读，只维护模型绑定）
-    function OfficialPresetModelRow({ preset, providers, onSave, disabled }) {
+    // 任意预设（自定义 / 官方内置）的默认模型绑定行
+    function PresetModelRow({ preset, providers, onSave, disabled }) {
       const initial = preset.boundModel || null;
       const [draft, setDraft] = useState(initial);
       const [saving, setSaving] = useState(false);
@@ -293,9 +293,12 @@ window.__ModuleLoader__.load({
             h("span", { style: { fontSize: "13px", fontWeight: 600, color: THEME.ink } }, preset.displayName || preset.name),
             h("code", { style: { marginLeft: "8px", fontSize: "11px", color: THEME.muted } }, preset.id),
             preset.isDefault ? h("span", { style: Object.assign({}, S.badge("rgba(16,185,129,.15)", THEME.success), { marginLeft: "8px" }) }, "DSH 默认") : null,
+            preset.source === "official"
+              ? h("span", { style: Object.assign({}, S.badge("rgba(59,130,246,.15)", THEME.accentFill), { marginLeft: "8px" }) }, "官方")
+              : h("span", { style: Object.assign({}, S.badge("rgba(168,85,247,.15)", THEME.muted), { marginLeft: "8px" }) }, "自定义"),
             preset.displayDescription ? h("div", { style: { fontSize: "11px", color: THEME.muted, marginTop: "2px" } }, preset.displayDescription) : null,
           ),
-          h("span", { style: { fontSize: "11px", color: THEME.muted } }, "官方预设 · 只读定义"),
+          h("span", { style: { fontSize: "11px", color: THEME.muted } }, preset.source === "official" ? "官方定义只读" : "定义在编辑页修改"),
         ),
         h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "8px" } },
           h("div", null,
@@ -1059,19 +1062,19 @@ window.__ModuleLoader__.load({
               );
             }),
           ),
-          // DSH 官方预设：定义只读，但可以绑定默认模型
+          // 任意预设（自定义 + 官方内置）的默认模型绑定
           (() => {
-            const officialRows = (presetRoster || []).filter((row) => row.source === "official");
-            if (officialRows.length === 0) return null;
+            const rows = presetRoster || [];
+            if (rows.length === 0) return null;
             return h("div", { style: { display: "flex", flexDirection: "column", gap: "10px" } },
               h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px" } },
                 h("div", null,
-                  h("span", { style: { fontSize: "14px", fontWeight: 650, color: THEME.ink } }, "DSH 官方预设"),
-                  h("span", { style: { fontSize: "12px", color: THEME.muted, marginLeft: "8px" } }, "定义只读；可绑定默认模型与思考强度"),
+                  h("span", { style: { fontSize: "14px", fontWeight: 650, color: THEME.ink } }, "默认模型与思考强度（任意预设）"),
+                  h("span", { style: { fontSize: "12px", color: THEME.muted, marginLeft: "8px" } }, "自定义预设和官方内置预设都可以绑定；官方定义只读"),
                 ),
                 h("button", { style: S.btnSecondary, onClick: loadModels }, "刷新模型目录"),
               ),
-              officialRows.map((row) => h(OfficialPresetModelRow, {
+              rows.map((row) => h(PresetModelRow, {
                 key: row.id,
                 preset: row,
                 providers: (modelCatalog && modelCatalog.providers) || [],
@@ -1103,6 +1106,7 @@ window.__ModuleLoader__.load({
           source: row.source || "custom",
           broken: row.broken || null,
           isDefault: row.isDefault === true,
+          boundModel: row.boundModel || null,
         }));
         const optionLabel = (option) =>
           (option.source === "official" ? "【官方】" : "【自定义】") +
@@ -1186,7 +1190,25 @@ window.__ModuleLoader__.load({
                 options.map((option) => h("option", { key: option.id, value: option.id },
                   optionLabel(option))),
               ),
+              h("label", { style: Object.assign({}, mutedText, { display: "flex", alignItems: "center", gap: "6px", cursor: "pointer" }) },
+                h("input", {
+                  type: "checkbox",
+                  style: checkbox,
+                  checked: rule.subfolders !== false,
+                  onChange: (e) => updateProjectRule(index, { subfolders: e.target.checked }),
+                }),
+                "包含子文件夹",
+              ),
             ),
+            (() => {
+              const selected = options.find((option) => option.id === rule.presetId);
+              if (!selected) return null;
+              const bound = selected.boundModel;
+              return h("div", { style: { fontSize: "11px", color: THEME.muted, marginTop: "-4px" } },
+                bound
+                  ? "该预设默认模型：" + bound.provider + "/" + bound.model + (bound.reasoningEffort ? " · " + bound.reasoningEffort : "") + "（用户手动改过模型后不覆盖）"
+                  : "该预设未绑定默认模型；在上方「默认模型与思考强度」区域可以为它设置。");
+            })(),
             missingPreset || notRegistered || brokenPreset || missingPath
               ? h("div", { style: Object.assign({}, S.warningBanner, { fontSize: "12px", alignItems: "flex-start" }) },
                   h("span", null,
@@ -1218,7 +1240,7 @@ window.__ModuleLoader__.load({
             h("div", { style: { display: "flex", gap: "18px", flexWrap: "wrap", fontSize: "12px", color: THEME.muted } },
               h("span", null, "DSH 当前默认预设：", h("b", { style: { color: THEME.ink } }, (info.officialDefaultName ? info.officialDefaultName + "（" + info.officialDefaultPreset + "）" : null) || info.officialDefaultPreset || "（未知）")),
               h("span", null, "规则数量：" + projectDraft.rules.length),
-              h("span", null, "匹配方式：目录完全一致（Windows 不区分大小写）"),
+              h("span", null, "匹配方式：文件夹本身及其所有子文件夹（就近优先；Windows 不区分大小写）"),
             ),
           ),
           // 新增规则
