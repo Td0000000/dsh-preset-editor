@@ -1,7 +1,7 @@
 {
   "name": "dsh-preset-editor",
-  "version": "1.5.1",
-  "description": "DeepSeek Harness visual preset editor: custom agent presets with SYS/USER/ASSISTANT message orchestration, officially localized AI tools, runtime tool awareness, and template-variable validation.",
+  "version": "1.6.0",
+  "description": "DeepSeek Harness visual preset editor: custom agent presets with SYS/USER/ASSISTANT message orchestration, officially localized AI tools, runtime tool awareness, template-variable validation, and per-project-folder default presets.",
   "type": "module",
   "main": "lib/index.js",
   "icon": "./icon.svg",
@@ -21,7 +21,8 @@
     "LICENSE"
   ],
   "scripts": {
-    "lint": "node --check lib/index.js && node --check lib/core.js && node --check lib/tools.js && node --check client.js"
+    "lint": "node --check lib/index.js && node --check lib/core.js && node --check lib/tools.js && node --check client.js",
+    "test": "node --test test/*.test.mjs"
   },
   "license": "MIT",
   "keywords": [

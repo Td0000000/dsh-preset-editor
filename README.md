@@ -4,7 +4,9 @@ DeepSeek Harness 自定义预设可视化编辑插件。
 
 支持对自定义 Agent 预设进行可视化创建、编辑、管理与导入导出，支持 `system`、`user`、`assistant` 消息编排，支持自主配备 AI 工具，直接融入官方 Agent 预设体系，新会话一键选择即可生效。
 
-> **本版本（v1.5.1）已适配 DSH NEXT `2.0.22-next`（内核 DeepSeek Harness `0.2.2-rc.1`）**（见下方「0.2.2 适配说明」及历史适配记录）。
+> **本版本（v1.6.0）适配 DSH NEXT `2.0.22-next`（内核 DeepSeek Harness `0.2.2-rc.3`）**（见下方「0.2.2 适配说明」及历史适配记录）。
+>
+> 1.6.0 新增：**按项目文件夹默认预设**——可以给不同项目文件夹指定默认 Agent 预设，新建会话时按工作目录自动套用；功能有总开关、规则可逐条启停，不修改 DSH 官方默认预设，用户手动选择的预设优先。见下方「按项目文件夹默认预设」。
 >
 > 1.5.1 说明：**修复 0.2.2 内核下所有自定义预设变成 broken 的根因**——`@deepseek-ai/dsh-tool-subagent-control` 删除了 `./list-agents` 子路径导出，旧预设里的 `tool-subagent-list-agents` 行无法解析，导致挂载失败、预设不可用。同时同步 0.2.2 的子代理 `modelSelection`/`modelDiscovery` 配置、官方新增的插件管理工具行与内置工具名单，并补上插件卸载/热重载时的预设与路由清理。
 >
@@ -43,6 +45,38 @@ DeepSeek Harness 自定义预设可视化编辑插件。
    - 保存 / 导入时会自动校验模板变量：只放行 `model` / `provider`，其余 `{{...}}` 直接报错拦截。
 6. **导入 / 导出**
    - 单个预设或全部预设导出为 JSON，一键导入，便于备份与跨机器迁移。
+7. **按项目文件夹默认预设（v1.6.0 新增）**
+   - 在设置页【预设编辑 → 项目默认】里给不同项目文件夹指定默认预设；新建会话时按会话工作目录自动套用。
+   - 功能有总开关，规则可逐条启用/停用；不修改 DSH 官方默认预设，也不影响没有配置规则的目录。
+   - 用户在新会话顶部手动选择了别的预设时，以用户选择为准；子代理 / fork 派生会话不受影响。
+
+---
+
+## 🧷 按项目文件夹默认预设（v1.6.0 新增）
+
+### 怎么用
+
+1. 打开「设置 → 预设编辑 → 项目默认」。
+2. 选择（或粘贴）项目文件夹绝对路径，再选择该文件夹要使用的自定义预设，点「加入规则」。
+3. 点「保存设置」。之后在该文件夹里新建会话，会话开始第一轮之前会自动切换到规则指定的预设。
+4. 顶部「总开关」控制整个功能；每条规则左侧的勾选框控制单条规则。默认关闭，避免影响现有使用习惯。
+
+### 优先级与边界
+
+| 情况 | 结果 |
+|---|---|
+| 总开关关闭 / 目录没配规则 / 规则被停用 | 完全跟随 DSH 官方默认预设（或调用方显式指定的预设） |
+| 规则命中且会话仍是空白（未开始第一轮） | 自动切换到规则预设，效果等同于用户在新会话顶部手动选择 |
+| 用户在新会话顶部手动选择了另一个预设 | 以用户选择为准，规则不覆盖 |
+| 规则引用的预设被删除 / 挂载失败 | 跳过该规则，回退 DSH 默认预设，并在诊断区记录原因 |
+| 子代理、fork 派生会话（`origin=subagent` / `parentSession` / `isSeeded`） | 继承父级组合，不应用规则 |
+| 已经开始的会话 | 不会中途换预设（DSH 本身也不允许） |
+
+实现方式（只使用官方公开扩展点）：宿主在 `agent/created`（serial 事件，创建返回前）读取 `SessionHeader.cwd`，命中规则且会话空白时调用官方 `ctx.agentPresets.select(agent, presetId)`。选择会按官方规则写入会话日志（`agent-preset/selected`），重启后按 projection 恢复。插件**从不改写** `agent-preset-registry` 的 `default` / `selectedDefault` 配置，因此不会与 DSH 自己的默认预设冲突。
+
+> 注意：目录匹配是**完全一致**（Windows 不区分大小写、忽略末尾分隔符），不做父目录/子目录继承；需要多个目录时逐条添加。
+>
+> 规则保存在 `$DSH_HOME/preset-editor.json` 的 `projectDefaults` 字段里；整体导出会带上该字段，导入整体备份时会一并恢复。
 
 ---
 
@@ -115,6 +149,18 @@ DSH NEXT `2.0.22-next` 把内核升级到 `0.2.2-rc.1`（Cordis `4.1.0`）。本
 
 **0.2.2 实机验证（隔离 profile + 官方 Host 启动器）**：插件可正常激活；`/dsh-preset-editor/state?diagnostics=1` 对所有预设返回 `ok: true`（含旧版遗留预设），启动日志不再出现 `never started`；设置页左侧出现【预设编辑】并正常读取数据；用自定义预设发起一轮真实对话，主模型请求实际收到 `system` persona 与每次请求前置的 `user`/`assistant` 注入条目；插件卸载/重载时会注销预设与路由。
 
+### 1.6.0 新增：按项目文件夹默认预设（2026-11-17）
+
+| 决策 | 官方 0.2.2 事实 | 本版本处理 |
+|---|---|---|
+| 在哪里按目录改预设 | 没有「创建前」事件、没有 preset resolver waterfall；`session.create` 只接受请求里的 `agentPreset`，不传就用 `defaultId`（`selectedDefault ?? default`） | 监听 serial 事件 `agent/created`（创建返回前 await），此时会话仍是 blank（`lastTurn=0`、无 open turn），调用官方公开服务 `agentPresets.select(agent, presetId)` |
+| 会不会和 DSH 默认预设打架 | `agentPresets.select()` 是官方给 blank 会话换预设的合法入口；官方客户端的新会话预设芯片也走同一个 Remote 方法 | 插件只调用 `select()`，从不改 `agent-preset-registry` 的 `default` / `selectedDefault`；规则关闭时完全跟随官方默认 |
+| 用户手选怎么办 | 创建请求带 `agentPreset` 时会先记入 `SessionHeader` / projection；客户端不传时用官方默认 | 若会话记录的预设既不是规则值、也不是 DSH 默认值，视为用户显式选择，跳过规则 |
+| 哪些会话不该动 | 子代理走 `composeFrom` 继承父级；fork 会话带 `isSeeded` / `parentSession`；开始过第一轮的会话 `select()` 会抛 `agent-preset/locked` | 过滤 `origin=subagent`、`parentSession`、`isSeeded`，并对所有 `agent/created` 做 blank 判定；异常全部吞掉，绝不让创建失败 |
+| 存储 | 本插件已有唯一真源 `$DSH_HOME/preset-editor.json` | 文档版本升到 3，新增 `projectDefaults: { enabled, rules[] }`；v2 文档读入自动补默认值，读写都不会丢字段 |
+
+> `agent/created` 是 serial 事件：监听器抛错会导致整个会话创建失败，因此实现里对读盘、目录匹配、`select()` 全部做了 try/catch，失败只记录诊断并回退官方默认。
+
 ### 为什么必须每次注入（抗压缩）
 
 DSH 的压缩（`@deepseek-ai/dsh-compaction-basic`）在 token 压力越过阈值时，
@@ -153,6 +199,10 @@ DSH 的压缩（`@deepseek-ai/dsh-compaction-basic`）在 token 压力越过阈�
 - 「插件管理工具」需要宿主提供 `profileContext`（桌面 / CLI profile 都有）；纯库环境里该行会被禁用，与官方 `standard` 预设的条件一致。该工具会走 DSH 审批流程，是否放进预设由你决定（默认与官方 standard 对齐、勾选）。
 - 子代理的路由字段只开在 `subagent`（spawn）实例上；`subagent_fork` 按官方约定不提供模型选择字段。
 - **升级到 0.2.2 后必须先更新插件再使用**：旧版 1.4.x 在 0.2.2 下会让预设挂载失败（`tool-subagent-list-agents` 行已不存在）。本插件宿主代码在启动时加载，更新插件后需要重启 DSH NEXT（或按插件页提示重启）才会生效。
+- 「按项目文件夹默认预设」只处理**空白会话**（未开始第一轮）。已经开始的会话无法中途换预设，这是 DSH 自身的约束。
+- 所谓“用户手动选择优先”依赖会话已记录了一个**不同于 DSH 默认值**的预设；如果用户手选的恰好就是 DSH 默认值，规则仍会把它换成文件夹预设（无法区分“没选”与“显式选了默认”）。
+- 目录规则是**完全匹配**，不是父目录继承；规则只在会话工作目录与该路径一致时生效。
+- 主会话之外（子代理、fork、定时任务恢复的派生会话等）不会应用项目规则。
 
 ---
 
@@ -160,7 +210,7 @@ DSH 的压缩（`@deepseek-ai/dsh-compaction-basic`）在 token 压力越过阈�
 
 ### 方式一：让 AI 一键安装（推荐 · 无需编译）
 
-本仓库根目录已附带**编译好的安装包**：[`dsh-preset-editor-1.5.1.tgz`](./dsh-preset-editor-1.5.1.tgz)。它不需要 `pnpm install` / `pnpm run build`，直接安装即可。
+本仓库根目录已附带**编译好的安装包**：[`dsh-preset-editor-1.6.0.tgz`](./dsh-preset-editor-1.6.0.tgz)。它不需要 `pnpm install` / `pnpm run build`，直接安装即可。
 
 把仓库拉到本地后，把下面这段提示词发给你的 AI 编程助手（Pi / Claude Code / Cursor / Windsurf / DSH 内置 Coding Agent）：
 
@@ -169,7 +219,7 @@ DSH 的压缩（`@deepseek-ai/dsh-compaction-basic`）在 token 压力越过阈�
 
 1. 克隆仓库到本地任意目录：git clone https://github.com/Td0000000/dsh-preset-editor.git
 2. 用 DSH 的 plugin_manager 工具执行 install_bundle，target 传仓库根目录里 tgz 的绝对路径，
-   例如 <克隆目录>/dsh-preset-editor-1.5.1.tgz
+   例如 <克隆目录>/dsh-preset-editor-1.6.0.tgz
    （install_bundle 会自动写入 profile 的 dependencies、加入 dsh.profile.bundles 并热重载，
      不需要手改 package.json / cordis.patch.yml / node_modules）
 3. 看到结果里 application=applied 后重启 DSH NEXT（宿主插件代码在启动时加载），
@@ -198,18 +248,22 @@ git clone https://github.com/Td0000000/dsh-preset-editor.git
 ## 🗂 数据位置
 
 - 预设存储：`$DSH_HOME/preset-editor.json`（`$DSH_HOME` 默认 `~/.dsh`）
+  - `presets`：自定义预设
+  - `projectDefaults`：按项目文件夹默认预设（`{ enabled, rules: [{ id, path, presetId, enabled }] }`）
 - 旧版遗留目录（仅一次性迁移，之后不再使用）：`$DSH_HOME/.agent-presets/`
 - HTTP 接口（供 UI 与外部工具使用）：
-  - `GET /dsh-preset-editor/state`（`?diagnostics=1` 附带挂载诊断）
+  - `GET /dsh-preset-editor/state`（`?diagnostics=1` 附带挂载诊断；含 `projectDefaultsInfo` 与 `projectRuntime` 最近生效记录）
   - `GET /dsh-preset-editor/tools`（返回可挂载工具 + 其它插件运行时提供的工具 `runtimeTools` + 被过滤的 DSH 自带工具数量 `filteredDshCount`）
   - `POST /dsh-preset-editor/save` / `delete` / `import`
+  - `POST /dsh-preset-editor/projects`（保存 `projectDefaults`）
+  - `GET /dsh-preset-editor/project-default?cwd=<绝对路径>`（预览某目录会命中哪条规则、最终默认预设）
   - `GET /dsh-preset-editor/export`（`?id=` 或 `?all=1`）
 
 ---
 
 ## 兼容性说明
 
-- **框架版本**：DeepSeek Harness `0.2.2-rc.1`（DSH NEXT `2.0.22-next`；`engines.dsh: ">=0.2.2-rc.1 <0.3.0"`）。
+- **框架版本**：DeepSeek Harness `0.2.2-rc.3`（DSH NEXT `2.0.22-next`；`engines.dsh: ">=0.2.2-rc.1 <0.3.0"`）。项目文件夹默认预设使用 0.2.2 的 `agent/created` serial 事件 + `agentPresets.select()`，0.2.1 及更早版本没有该组合。
 - **微内核**：基于 `@deepseek-ai/cordis` `~4.1.0`。
 - **环境要求**：使用桌面版内置 Node（`24.21`）；自行运行 Host 时 Node.js >= `24.9`。
 

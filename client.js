@@ -14,6 +14,10 @@ window.__ModuleLoader__.load({
 
     const name = "dsh-preset-editor";
     const inject = ["slots"];
+    // 供「项目目录选择」等可选客户端服务使用；在 apply(ctx) 时绑定。
+    let clientCtx = null;
+    // 可选：官方 uiWorkspace 服务（原生目录选择器）。桌面端存在，纯库环境可能没有。
+    let directoryPicker = null;
 
     // 样式规范与主题变量
     const THEME = {
@@ -275,6 +279,13 @@ window.__ModuleLoader__.load({
       const [showVariablesModal, setShowVariablesModal] = useState(false);
       const [deleteConfirmId, setDeleteConfirmId] = useState(null);
 
+      // 项目文件夹默认预设：本地编辑草稿 + 宿主运行时信息
+      const [projectDraft, setProjectDraft] = useState(null);
+      const [projectInfo, setProjectInfo] = useState(null);
+      const [projectRuntime, setProjectRuntime] = useState(null);
+      const [newRule, setNewRule] = useState({ path: "", presetId: "", enabled: true });
+      const [projectBusy, setProjectBusy] = useState(false);
+
       const fileInputRef = useRef(null);
 
       // 加载所有预设与状态
@@ -285,8 +296,37 @@ window.__ModuleLoader__.load({
           .then((d) => {
             if (d.ok) {
               setDoc(d.doc);
+              setProjectInfo(d.projectDefaultsInfo || null);
+              setProjectRuntime(d.projectRuntime || null);
             } else {
               setNotice({ kind: "error", text: "读取预设失败: " + (d.error || "") });
+            }
+          })
+          .catch((e) => setNotice({ kind: "error", text: "网络请求异常: " + e.message }))
+          .finally(() => setBusy(false));
+      }, []);
+
+      const cloneProjectDefaults = (value) => {
+        const src = value && typeof value === "object" ? value : {};
+        return {
+          enabled: src.enabled === true,
+          rules: Array.isArray(src.rules) ? JSON.parse(JSON.stringify(src.rules)) : [],
+        };
+      };
+
+      // 单独刷新「项目默认预设」：会重置未保存的草稿
+      const loadProjects = useCallback(() => {
+        setBusy(true);
+        fetch("/dsh-preset-editor/state", { cache: "no-store" })
+          .then((r) => r.json())
+          .then((d) => {
+            if (d.ok) {
+              setDoc(d.doc);
+              setProjectInfo(d.projectDefaultsInfo || null);
+              setProjectRuntime(d.projectRuntime || null);
+              setProjectDraft(cloneProjectDefaults(d.doc && d.doc.projectDefaults));
+            } else {
+              setNotice({ kind: "error", text: "读取项目默认预设失败: " + (d.error || "") });
             }
           })
           .catch((e) => setNotice({ kind: "error", text: "网络请求异常: " + e.message }))
@@ -508,6 +548,102 @@ window.__ModuleLoader__.load({
         reader.readAsText(file);
       };
 
+      // ── 项目文件夹默认预设 ────────────────────────────────────────────────
+      const updateProjectRule = (index, patch) => {
+        setProjectDraft((prev) => {
+          if (!prev) return prev;
+          const rules = prev.rules.map((rule, i) => (i === index ? { ...rule, ...patch } : rule));
+          return { ...prev, rules };
+        });
+      };
+
+      const handleAddProjectRule = () => {
+        const pathValue = String(newRule.path || "").trim();
+        if (!pathValue) {
+          setNotice({ kind: "error", text: "请填写或选择项目文件夹路径。" });
+          return;
+        }
+        if (!newRule.presetId) {
+          setNotice({ kind: "error", text: "请选择该文件夹要使用的预设。" });
+          return;
+        }
+        setProjectDraft((prev) => {
+          const base = prev || { enabled: false, rules: [] };
+          const rule = {
+            id: "pd-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 6),
+            path: pathValue,
+            presetId: newRule.presetId,
+            enabled: newRule.enabled !== false,
+          };
+          return { ...base, rules: [...base.rules, rule] };
+        });
+        setNewRule({ path: "", presetId: "", enabled: true });
+        setNotice({ kind: "ok", text: "规则已加入草稿，点击「保存设置」生效。" });
+      };
+
+      const handleRemoveProjectRule = (index) => {
+        setProjectDraft((prev) => {
+          if (!prev) return prev;
+          return { ...prev, rules: prev.rules.filter((_, i) => i !== index) };
+        });
+      };
+
+      const handlePickProjectDirectory = () => {
+        let pick;
+        try {
+          if (directoryPicker && typeof directoryPicker.pick === "function") {
+            pick = directoryPicker.pick;
+          } else {
+            const service =
+              (clientCtx && clientCtx.uiWorkspace) ||
+              (clientCtx && typeof clientCtx.get === "function" && clientCtx.get("uiWorkspace")) ||
+              null;
+            if (service && typeof service.pickDirectory === "function") {
+              pick = () => service.pickDirectory();
+            }
+          }
+        } catch {
+          pick = undefined;
+        }
+        if (typeof pick !== "function") {
+          setNotice({ kind: "error", text: "当前环境不支持目录选择器，请直接粘贴绝对路径。" });
+          return;
+        }
+        Promise.resolve()
+          .then(() => pick())
+          .then((picked) => {
+            if (typeof picked === "string" && picked.trim()) {
+              setNewRule((prev) => ({ ...prev, path: picked }));
+            }
+          })
+          .catch((error) => {
+            setNotice({ kind: "error", text: "打开目录选择器失败: " + (error && error.message ? error.message : error) });
+          });
+      };
+
+      const handleSaveProjects = () => {
+        if (!projectDraft) return;
+        setProjectBusy(true);
+        fetch("/dsh-preset-editor/projects", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ projectDefaults: projectDraft }),
+        })
+          .then((r) => r.json())
+          .then((d) => {
+            if (d.ok) {
+              setDoc(d.doc);
+              setProjectInfo(d.projectDefaultsInfo || null);
+              setProjectDraft(cloneProjectDefaults(d.doc && d.doc.projectDefaults));
+              setNotice({ kind: "ok", text: "项目文件夹默认预设已保存，新建会话即按工作目录生效。" });
+            } else {
+              setNotice({ kind: "error", text: "保存失败: " + (d.error || "") });
+            }
+          })
+          .catch((e) => setNotice({ kind: "error", text: "保存请求失败: " + e.message }))
+          .finally(() => setProjectBusy(false));
+      };
+
       // 草稿消息条目操作
       const updateDraftField = (key, val) => {
         setDraft((prev) => ({ ...prev, [key]: val }));
@@ -581,13 +717,17 @@ window.__ModuleLoader__.load({
       const renderHeader = () => {
         return h("div", { style: S.header },
           h("h1", { style: S.title }, "预设编辑"),
-          h("p", { style: S.subtitle }, "可视化编辑预设，选择一个预设并保存，新对话即可生效。"),
+          h("p", { style: S.subtitle }, "可视化编辑预设，选择一个预设并保存，新对话即可生效；也可按项目文件夹指定默认预设。"),
           h("hr", { style: S.divider }),
           h("div", { style: S.navBar },
             h("button", {
               style: S.navButton(view === "current"),
               onClick: () => { setView("current"); setDraft(null); loadState(); },
             }, "当前预设"),
+            h("button", {
+              style: S.navButton(view === "projects"),
+              onClick: () => { setView("projects"); setDraft(null); loadProjects(); },
+            }, "项目默认"),
             h("button", {
               style: S.navButton(view === "create"),
               onClick: handleOpenCreate,
@@ -739,6 +879,191 @@ window.__ModuleLoader__.load({
               );
             }),
           ),
+        );
+      };
+
+      // 渲染「项目默认」视图：按项目文件夹指定默认预设（总开关 + 规则）
+      const renderProjectsView = () => {
+        if (!projectDraft) {
+          return h("p", { style: { color: THEME.muted, fontSize: "13px" } }, "正在读取项目默认预设…");
+        }
+        const info = projectInfo || {};
+        const infoById = {};
+        for (const row of Array.isArray(info.rules) ? info.rules : []) infoById[row.id] = row;
+        const presetOptions = presetsList.map((p) => ({ id: p.id, name: p.name || p.id }));
+        const checkbox = {
+          width: "16px",
+          height: "16px",
+          cursor: "pointer",
+          accentColor: THEME.accentFill,
+        };
+        const mono = {
+          fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
+          fontSize: "12px",
+        };
+        const mutedText = { fontSize: "12px", color: THEME.muted };
+
+        const renderRule = (rule, index) => {
+          const runtimeInfo = infoById[rule.id] || rule;
+          const missingPreset = runtimeInfo.presetExists === false;
+          const notRegistered = runtimeInfo.presetExists === true && runtimeInfo.presetRegistered === false;
+          const missingPath = runtimeInfo.pathExists === false;
+          const options = presetOptions.slice();
+          if (!options.some((option) => option.id === rule.presetId)) {
+            options.push({ id: rule.presetId, name: rule.presetId + "（已不存在）" });
+          }
+          return h("div", {
+            key: rule.id || "rule-" + index,
+            style: Object.assign({}, S.card, { gap: "10px", padding: "14px 16px" }),
+          },
+            h("div", { style: { display: "flex", gap: "10px", alignItems: "center", flexWrap: "wrap" } },
+              h("input", {
+                type: "checkbox",
+                style: checkbox,
+                checked: rule.enabled !== false,
+                title: "启用/停用这条规则",
+                onChange: (e) => updateProjectRule(index, { enabled: e.target.checked }),
+              }),
+              h("code", {
+                style: Object.assign({
+                  flex: 1,
+                  minWidth: "220px",
+                  color: THEME.ink,
+                  wordBreak: "break-all",
+                  background: "var(--dsw-alias-bg-layer-2, rgba(255,255,255,.05))",
+                  border: "1px solid " + THEME.borderLight,
+                  borderRadius: "6px",
+                  padding: "5px 8px",
+                }, mono),
+              }, rule.path || "（空路径）"),
+              h("button", {
+                style: Object.assign({}, S.btnDanger, { padding: "4px 10px", fontSize: "12px" }),
+                onClick: () => handleRemoveProjectRule(index),
+              }, "删除"),
+            ),
+            h("div", { style: { display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" } },
+              h("span", { style: mutedText }, "目录"),
+              h("input", {
+                style: Object.assign({}, S.input, { flex: 1, minWidth: "260px" }, mono),
+                value: rule.path || "",
+                placeholder: "项目文件夹绝对路径",
+                onChange: (e) => updateProjectRule(index, { path: e.target.value }),
+              }),
+            ),
+            h("div", { style: { display: "flex", gap: "10px", flexWrap: "wrap", alignItems: "center" } },
+              h("span", { style: mutedText }, "默认预设"),
+              h("select", {
+                style: Object.assign({}, S.input, { flex: 1, minWidth: "220px" }),
+                value: rule.presetId || "",
+                onChange: (e) => updateProjectRule(index, { presetId: e.target.value }),
+              },
+                options.map((option) => h("option", { key: option.id, value: option.id },
+                  option.name + "（" + option.id + "）")),
+              ),
+            ),
+            missingPreset || notRegistered || missingPath
+              ? h("div", { style: Object.assign({}, S.warningBanner, { fontSize: "12px", alignItems: "flex-start" }) },
+                  h("span", null,
+                    missingPreset ? "⚠ 预设已不存在，本规则不会生效（回退 DSH 默认预设）。 " : "",
+                    notRegistered ? "⚠ 预设当前挂载失败，本规则不会生效。 " : "",
+                    missingPath ? "⚠ 该目录当前不存在；首次在该目录新建会话时 DSH 会自动创建它。" : "",
+                  ),
+                )
+              : null,
+          );
+        };
+
+        return h("div", { style: { display: "flex", flexDirection: "column", gap: "16px" } },
+          // 总开关与说明
+          h("div", { style: S.card },
+            h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "12px", flexWrap: "wrap" } },
+              h("div", { style: { flex: 1, minWidth: "260px" } },
+                h("div", { style: { fontSize: "15px", fontWeight: 650, color: THEME.ink } }, "按项目文件夹使用默认预设"),
+                h("div", { style: { fontSize: "12px", color: THEME.muted, marginTop: "4px", lineHeight: 1.6 } },
+                  "开启后，新建会话会读取会话的工作目录；命中规则时自动切换到该文件夹指定的预设（只在会话开始第一轮之前生效）。",
+                  "本功能不会修改 DSH 官方默认预设；如果用户在新会话顶部手动选择了别的预设，以用户选择为准。"),
+              ),
+              h("button", {
+                style: projectDraft.enabled ? S.btnPrimary : S.btnSecondary,
+                onClick: () => setProjectDraft((prev) => ({ ...(prev || { rules: [] }), enabled: !(prev && prev.enabled) })),
+              }, projectDraft.enabled ? "总开关：已开启" : "总开关：已关闭"),
+            ),
+            h("div", { style: { display: "flex", gap: "18px", flexWrap: "wrap", fontSize: "12px", color: THEME.muted } },
+              h("span", null, "DSH 当前默认预设：", h("b", { style: { color: THEME.ink } }, info.officialDefaultPreset || "（未知）")),
+              h("span", null, "规则数量：" + projectDraft.rules.length),
+              h("span", null, "匹配方式：目录完全一致（Windows 不区分大小写）"),
+            ),
+          ),
+          // 新增规则
+          h("div", { style: S.card },
+            h("div", { style: { fontSize: "14px", fontWeight: 600, color: THEME.ink } }, "新增规则"),
+            h("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" } },
+              h("input", {
+                style: Object.assign({}, S.input, { flex: 1, minWidth: "280px" }, mono),
+                placeholder: "项目文件夹绝对路径，例如 C:\\Users\\Td\\Desktop\\AiWork\\projects\\foo",
+                value: newRule.path,
+                onChange: (e) => setNewRule((prev) => ({ ...prev, path: e.target.value })),
+              }),
+              h("button", { style: S.btnSecondary, onClick: handlePickProjectDirectory }, "选择文件夹"),
+            ),
+            h("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" } },
+              h("select", {
+                style: Object.assign({}, S.input, { flex: 1, minWidth: "220px" }),
+                value: newRule.presetId,
+                onChange: (e) => setNewRule((prev) => ({ ...prev, presetId: e.target.value })),
+              },
+                h("option", { value: "" }, "选择预设…"),
+                presetOptions.map((option) => h("option", { key: option.id, value: option.id },
+                  option.name + "（" + option.id + "）")),
+              ),
+              h("label", { style: { display: "inline-flex", alignItems: "center", gap: "6px", fontSize: "12px", color: THEME.muted } },
+                h("input", {
+                  type: "checkbox",
+                  style: checkbox,
+                  checked: newRule.enabled !== false,
+                  onChange: (e) => setNewRule((prev) => ({ ...prev, enabled: e.target.checked })),
+                }),
+                "加入后启用",
+              ),
+              h("button", { style: S.btnPrimary, onClick: handleAddProjectRule }, "+ 加入规则"),
+            ),
+            presetOptions.length === 0
+              ? h("div", { style: Object.assign({}, S.warningBanner, { fontSize: "12px" }) },
+                  "还没有自定义预设。请先在「当前预设」里新建或导入预设，再配置项目规则。")
+              : null,
+          ),
+          // 规则列表
+          h("div", { style: { display: "flex", flexDirection: "column", gap: "12px" } },
+            h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", gap: "8px", flexWrap: "wrap" } },
+              h("span", { style: { fontSize: "13px", color: THEME.muted } }, `规则列表（${projectDraft.rules.length} 条，保存后才写入磁盘）`),
+              h("div", { style: { display: "flex", gap: "8px" } },
+                h("button", { style: S.btnSecondary, onClick: loadProjects }, "刷新"),
+                h("button", {
+                  style: Object.assign({}, S.btnPrimary, projectBusy ? { opacity: 0.6, cursor: "default" } : {}),
+                  disabled: projectBusy,
+                  onClick: handleSaveProjects,
+                }, projectBusy ? "保存中…" : "保存设置"),
+              ),
+            ),
+            projectDraft.rules.length === 0
+              ? h("div", { style: Object.assign({}, S.card, { alignItems: "center", padding: "32px 20px" }) },
+                  h("p", { style: { color: THEME.muted, fontSize: "13px", margin: 0 } },
+                    "暂无规则。添加后，只有这些文件夹里的新会话会使用指定预设；其它目录仍用 DSH 官方默认。"),
+                )
+              : projectDraft.rules.map(renderRule),
+          ),
+          // 最近生效记录（诊断）
+          projectRuntime && (((projectRuntime.applied || []).length > 0) || ((projectRuntime.skipped || []).length > 0))
+            ? h("div", { style: S.card },
+                h("div", { style: { fontSize: "14px", fontWeight: 600, color: THEME.ink } }, "最近生效记录（诊断）"),
+                (projectRuntime.applied || []).slice(0, 6).map((row, i) =>
+                  h("div", { key: "applied-" + i, style: { fontSize: "12px", color: THEME.success, wordBreak: "break-all" } },
+                    "✔ " + row.cwd + " → " + row.presetId + "（" + new Date(row.time).toLocaleString() + "）")),
+                (projectRuntime.skipped || []).slice(0, 6).map((row, i) =>
+                  h("div", { key: "skipped-" + i, style: { fontSize: "12px", color: THEME.muted, wordBreak: "break-all" } },
+                    "– " + (row.cwd || "") + "：" + row.reason)),
+              )
+            : null,
         );
       };
 
@@ -1268,13 +1593,28 @@ window.__ModuleLoader__.load({
 
       return h("div", { style: S.container },
         renderHeader(),
-        view === "current" ? renderCurrentView() : renderEditOrCreateView(),
+        view === "current"
+          ? renderCurrentView()
+          : view === "projects"
+          ? renderProjectsView()
+          : renderEditOrCreateView(),
         renderToolsModal(),
         renderVariablesModal(),
       );
     }
 
     function apply(ctx) {
+      clientCtx = ctx;
+      // 可选依赖：官方工作区服务提供原生目录选择器；不存在时设置页仍可手动输入路径。
+      try {
+        ctx.inject(["uiWorkspace"], (child) => {
+          directoryPicker = {
+            pick: () => child.uiWorkspace.pickDirectory(),
+          };
+        });
+      } catch (error) {
+        console.warn("[dsh-preset-editor] uiWorkspace unavailable; directory picker disabled:", error);
+      }
       ctx.slots.inject("settings.section", () =>
         ctx.slots.register({
           name: "settings.section",
