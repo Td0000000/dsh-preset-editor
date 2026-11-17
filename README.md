@@ -161,6 +161,15 @@ DSH NEXT `2.0.22-next` 把内核升级到 `0.2.2-rc.1`（Cordis `4.1.0`）。本
 
 > `agent/created` 是 serial 事件：监听器抛错会导致整个会话创建失败，因此实现里对读盘、目录匹配、`select()` 全部做了 try/catch，失败只记录诊断并回退官方默认。
 
+**实机验证（2026-11-17，DSH Desktop 0.2.2-rc.3，官方默认预设设为 `minimal` 极简模式）**：用宿主官方 `sessionController.create()` 创建真实空白会话，共 11 个场景全部通过——
+
+- 配置目录 A / B → 会话记录预设与 Agent 实际挂载组合都是规则预设（`test-alpha` / `test-beta`）；
+- 未配置目录、子目录（不做父目录继承）→ 都正确回退官方默认 `minimal`；
+- 在同一目录里显式手选官方 `standard` 或自定义 `pi-spider` → 以用户选择为准，诊断区记录 `skipped`；
+- 路径大小写不敏感、末尾分隔符不影响匹配；
+- 总开关关闭 / 单条规则停用 → 回退 `minimal`；重新启用 → 恢复规则预设；
+- 全程 `officialDefaultPreset` 保持 `minimal`，插件没有改写 DSH 的默认预设配置。
+
 ### 为什么必须每次注入（抗压缩）
 
 DSH 的压缩（`@deepseek-ai/dsh-compaction-basic`）在 token 压力越过阈值时，
