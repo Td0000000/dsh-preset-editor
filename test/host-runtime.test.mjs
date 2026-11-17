@@ -619,6 +619,80 @@ test("HTTP /projects 允许保存官方预设规则，未知预设仍拒绝", as
   fake.cleanup();
 });
 
+test("官方内置预设也能绑定默认模型（presetModels 映射），会话创建时套用", async () => {
+  writeStore({
+    version: 3,
+    presets: { "pi-spider": preset() },
+    presetModels: {
+      minimal: {
+        provider: "opencode-go",
+        model: "claude-haiku-5-5",
+        reasoningEffort: "medium",
+      },
+    },
+    projectDefaults: { enabled: false, rules: [] },
+  });
+  const session = sessionFor(OTHER_DIR);
+  const agent = { id: session.id, session, model: { select: (selection) => fake.modelSelections.push(selection) } };
+  const fake = makeFakeContext({ agentForSession: () => agent, defaultId: "minimal" });
+  plugin.apply(fake.ctx);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  await fake.emit("agent/created", { agent, source: "startup" });
+
+  assert.equal(fake.selectCalls.length, 0, "没有目录规则，不应切预设");
+  assert.deepEqual(fake.modelSelections, [
+    { provider: "opencode-go", model: "claude-haiku-5-5", reasoningEffort: "medium" },
+  ]);
+  fake.cleanup();
+});
+
+test("HTTP /preset-model：可以给官方预设保存/清除默认模型绑定", async () => {
+  writeStore({
+    version: 3,
+    presets: { "pi-spider": preset() },
+    projectDefaults: { enabled: false, rules: [] },
+  });
+  const fake = makeFakeContext();
+  plugin.apply(fake.ctx);
+  await new Promise((resolve) => setTimeout(resolve, 30));
+
+  const saved = await fake.call("/dsh-preset-editor/preset-model", {
+    method: "POST",
+    body: {
+      presetId: "standard",
+      model: { provider: "opencode-go", model: "claude-haiku-5-5", reasoningEffort: "high" },
+    },
+  });
+  assert.equal(saved.status, 200, JSON.stringify(saved.json));
+  assert.deepEqual(saved.json.doc.presetModels.standard, {
+    provider: "opencode-go",
+    model: "claude-haiku-5-5",
+    reasoningEffort: "high",
+  });
+  const state = await fake.call("/dsh-preset-editor/state");
+  const officialRow = state.json.presetRoster.find((row) => row.id === "standard");
+  assert.deepEqual(officialRow.boundModel, {
+    provider: "opencode-go",
+    model: "claude-haiku-5-5",
+    reasoningEffort: "high",
+  });
+
+  const cleared = await fake.call("/dsh-preset-editor/preset-model", {
+    method: "POST",
+    body: { presetId: "standard", model: null },
+  });
+  assert.equal(cleared.status, 200);
+  assert.equal(cleared.json.doc.presetModels.standard, undefined);
+
+  const unknown = await fake.call("/dsh-preset-editor/preset-model", {
+    method: "POST",
+    body: { presetId: "ghost", model: { provider: "p", model: "m" } },
+  });
+  assert.equal(unknown.status, 400);
+  fake.cleanup();
+});
+
 test.after(() => {
   fs.rmSync(tmpHome, { recursive: true, force: true });
 });

@@ -4,9 +4,11 @@ DeepSeek Harness 自定义预设可视化编辑插件。
 
 支持对自定义 Agent 预设进行可视化创建、编辑、管理与导入导出，支持 `system`、`user`、`assistant` 消息编排，支持自主配备 AI 工具，直接融入官方 Agent 预设体系，新会话一键选择即可生效。
 
-> **本版本（v1.7.0）适配 DSH NEXT `2.0.22-next`（内核 DeepSeek Harness `0.2.2-rc.3`）**（见下方「0.2.2 适配说明」及历史适配记录）。
+> **本版本（v1.8.0）适配 DSH NEXT `2.0.22-next`（内核 DeepSeek Harness `0.2.2-rc.3`）**（见下方「0.2.2 适配说明」及历史适配记录）。
 >
-> 1.7.0 新增：①「项目默认预设」的规则现在可以选择 **DSH 官方内置预设**（standard / minimal / ptc / cordis），不再只限自定义预设；②每个自定义预设可以绑定**默认上游模型与思考强度**，使用该预设的会话在还没有显式选模型时会自动套用（模型列表来自 DSH 当前已配置的上游）。见下方「按项目文件夹默认预设」和「预设默认模型」。
+> 1.8.0 新增：**任意预设（含 DSH 官方内置）都可以绑定默认上游模型与思考强度**。自定义预设在编辑页底部设置；官方内置预设在「当前预设」页的官方预设列表里设置。模型列表来自 DSH 当前已配置的上游。
+>
+> 1.7.0 新增：①「项目默认预设」的规则可以选择 **DSH 官方内置预设**（standard / minimal / ptc / cordis），不再只限自定义预设；②自定义预设可绑定默认上游模型与思考强度。见下方「按项目文件夹默认预设」和「预设默认模型」。
 >
 > 1.6.0 新增：**按项目文件夹默认预设**——可以给不同项目文件夹指定默认 Agent 预设，新建会话时按工作目录自动套用；功能有总开关、规则可逐条启停，不修改 DSH 官方默认预设，用户手动选择的预设优先。
 >
@@ -52,11 +54,12 @@ DeepSeek Harness 自定义预设可视化编辑插件。
    - 规则目标可以是**自定义预设**，也可以是 **DSH 官方内置预设**（standard / minimal / ptc / cordis）。
    - 功能有总开关，规则可逐条启用/停用；不修改 DSH 官方默认预设，也不影响没有配置规则的目录。
    - 用户在新会话顶部手动选择了别的预设时，以用户选择为准；子代理 / fork 派生会话不受影响。
-8. **预设默认模型与思考强度（v1.7.0 新增）**
-   - 每个自定义预设可以绑定一个默认「上游 provider + 模型 + 思考强度」；会话使用该预设且尚未显式选择模型时自动套用。
+8. **预设默认模型与思考强度（v1.7.0 新增 / v1.8.0 支持官方预设）**
+   - **每个预设**（自定义预设 + DSH 官方内置预设）都可以绑定一个默认「上游 provider + 模型 + 思考强度」；会话使用该预设且尚未显式选择模型时自动套用。
    - 模型列表实时来自 DSH 已配置的上游（`/dsh-preset-editor/models`），不是写死的清单。
    - 会话已经有显式模型选择（用户手动改过模型）时不会被覆盖；模型不可用/未配置时自动跳过并记录诊断。
    - 不修改 DSH 的全局默认模型：绑定只写入当前会话的模型选择（`model/selection` 事件）。
+   - 自定义预设绑定的存储位置：预设对象 `model` 字段；官方预设绑定在文档级 `presetModels[presetId]` 映射（官方定义保持只读）。
 
 ---
 
@@ -88,14 +91,16 @@ DeepSeek Harness 自定义预设可视化编辑插件。
 >
 > 规则保存在 `$DSH_HOME/preset-editor.json` 的 `projectDefaults` 字段里；整体导出会带上该字段，导入整体备份时会一并恢复。
 
-### 预设默认模型与思考强度（v1.7.0 新增）
+### 预设默认模型与思考强度（v1.7.0 新增，v1.8.0 扩展到官方预设）
 
-- 在「新建预设 / 编辑预设」页面底部设置「默认模型与思考强度」：上游 Provider → 模型 → 思考强度（可选「跟随模型默认」）。
-- 数据存在预设对象的 `model` 字段：`{ provider, model, reasoningEffort? }`，随预设一起导出/导入。
+- **自定义预设**：在「新建预设 / 编辑预设」页面底部设置「默认模型与思考强度」：上游 Provider → 模型 → 思考强度（可选「跟随模型默认」）。
+- **官方内置预设**：在「当前预设」页面下方「DSH 官方预设」区域逐个设置（官方定义只读，只维护模型绑定）。
+- 数据存储：自定义预设写在预设对象的 `model` 字段（`{ provider, model, reasoningEffort? }`，随预设导出/导入）；官方预设写在文档级 `presetModels: { [presetId]: {...} }`；自定义预设的 `model` 优先。
 - 生效时机：会话使用该预设、且**还没有显式模型选择**时，写入当前会话的模型选择（`agent.model.select()`，即会话日志里的 `model/selection`）。覆盖两条路径：目录规则自动切到该预设；用户在新会话顶部手选该预设。
 - 不生效：会话已有显式模型选择（例如用户手动改过模型）；模型未在 DSH 上游目录里 / provider 未配置 / 思考强度不被支持 → 跳过并记录诊断，会话保持当前模型。
 - **不会改 DSH 全局默认模型**：没有调用会保存全局默认的接口，只写当前会话。
 - 保存时按当前模型目录校验展示；运行时会再校验一次，避免上游配置变更后预设不可用。
+- 接口：`GET /dsh-preset-editor/models` 拉上游模型目录；`POST /dsh-preset-editor/preset-model` 保存/清除任意预设（含官方）的模型绑定。
 
 ---
 
@@ -211,6 +216,8 @@ DSH NEXT `2.0.22-next` 把内核升级到 `0.2.2-rc.1`（Cordis `4.1.0`）。本
 
 测试用的临时 dev 路由已从正式 1.7.0 构建删除并重新安装验证。
 
+**v1.8.0 补充实机验证（6/6）**：给官方预设 `minimal` 绑定 `opencode-go/claude-haiku-5-5 + medium`、给 `standard` 绑定 `cpa/nvidia-glm-5.3-flash + high` → 新建会话（默认 minimal / 显式 standard）的 `modelSelection.next` 分别与绑定一致；清除绑定后 `presetModels` 恢复为空。测试后已还原，未留下测试配置。
+
 ### 为什么必须每次注入（抗压缩）
 
 DSH 的压缩（`@deepseek-ai/dsh-compaction-basic`）在 token 压力越过阈值时，
@@ -256,7 +263,7 @@ DSH 的压缩（`@deepseek-ai/dsh-compaction-basic`）在 token 压力越过阈�
 - 预设默认模型绑定只在**会话还没有显式模型选择**时生效；用户手动改过模型的会话不会被覆盖（复用 blank 会话时也一样）。
 - 模型绑定按“provider + model + 可选 effort”保存，不校验模型能力细节（如上下文长度）；运行前会用官方 `llm.resolveCallConfig()` 校验一次，失败则跳过并回退会话当前模型。
 - 模型绑定**不会修改 DSH 全局默认模型**；如果你希望全局默认也变，请到 DSH 设置里单独改。
-- 官方内置预设不能绑定模型（本插件不维护官方预设定义）；官方预设的模型由 DSH 自己的会话/默认模型决定。
+- 官方内置预设的定义是只读的：本插件只能为它维护默认模型绑定（存在文档级 `presetModels`），不能改它的工具/提示词。
 
 ---
 
@@ -264,7 +271,7 @@ DSH 的压缩（`@deepseek-ai/dsh-compaction-basic`）在 token 压力越过阈�
 
 ### 方式一：让 AI 一键安装（推荐 · 无需编译）
 
-本仓库根目录已附带**编译好的安装包**：[`dsh-preset-editor-1.7.0.tgz`](./dsh-preset-editor-1.7.0.tgz)。它不需要 `pnpm install` / `pnpm run build`，直接安装即可。
+本仓库根目录已附带**编译好的安装包**：[`dsh-preset-editor-1.8.0.tgz`](./dsh-preset-editor-1.8.0.tgz)。它不需要 `pnpm install` / `pnpm run build`，直接安装即可。
 
 把仓库拉到本地后，把下面这段提示词发给你的 AI 编程助手（Pi / Claude Code / Cursor / Windsurf / DSH 内置 Coding Agent）：
 
@@ -273,7 +280,7 @@ DSH 的压缩（`@deepseek-ai/dsh-compaction-basic`）在 token 压力越过阈�
 
 1. 克隆仓库到本地任意目录：git clone https://github.com/Td0000000/dsh-preset-editor.git
 2. 用 DSH 的 plugin_manager 工具执行 install_bundle，target 传仓库根目录里 tgz 的绝对路径，
-   例如 <克隆目录>/dsh-preset-editor-1.7.0.tgz
+   例如 <克隆目录>/dsh-preset-editor-1.8.0.tgz
    （install_bundle 会自动写入 profile 的 dependencies、加入 dsh.profile.bundles 并热重载，
      不需要手改 package.json / cordis.patch.yml / node_modules）
 3. 看到结果里 application=applied 后重启 DSH NEXT（宿主插件代码在启动时加载），
@@ -303,14 +310,16 @@ git clone https://github.com/Td0000000/dsh-preset-editor.git
 
 - 预设存储：`$DSH_HOME/preset-editor.json`（`$DSH_HOME` 默认 `~/.dsh`）
   - `presets`：自定义预设（每个可带 `model: { provider, model, reasoningEffort? }` 默认模型绑定）
+  - `presetModels`：任意预设（含官方内置）的默认模型绑定映射 `{ [presetId]: { provider, model, reasoningEffort? } }`；自定义预设自身的 `model` 优先
   - `projectDefaults`：按项目文件夹默认预设（`{ enabled, rules: [{ id, path, presetId, enabled }] }`；`presetId` 可以是自定义预设或官方内置预设）
 - 旧版遗留目录（仅一次性迁移，之后不再使用）：`$DSH_HOME/.agent-presets/`
 - HTTP 接口（供 UI 与外部工具使用）：
   - `GET /dsh-preset-editor/state`（`?diagnostics=1` 附带挂载诊断；含 `presetRoster`、`projectDefaultsInfo` 与 `projectRuntime` 最近生效记录）
   - `GET /dsh-preset-editor/tools`（返回可挂载工具 + 其它插件运行时提供的工具 `runtimeTools` + 被过滤的 DSH 自带工具数量 `filteredDshCount`）
-  - `GET /dsh-preset-editor/presets`（当前可选预设名册：自定义 + 官方内置，含 `source`/`isDefault`/`broken`）
+  - `GET /dsh-preset-editor/presets`（当前可选预设名册：自定义 + 官方内置，含 `source`/`isDefault`/`broken`/`boundModel`）
   - `GET /dsh-preset-editor/models`（DSH 当前已配置上游的模型目录，含 reasoning efforts）
   - `POST /dsh-preset-editor/save` / `delete` / `import`
+  - `POST /dsh-preset-editor/preset-model`（保存/清除任意预设的默认模型绑定：`{ presetId, model|null }`）
   - `POST /dsh-preset-editor/projects`（保存 `projectDefaults`）
   - `GET /dsh-preset-editor/project-default?cwd=<绝对路径>`（预览某目录会命中哪条规则、最终默认预设）
   - `GET /dsh-preset-editor/export`（`?id=` 或 `?all=1`）
@@ -319,7 +328,7 @@ git clone https://github.com/Td0000000/dsh-preset-editor.git
 
 ## 兼容性说明
 
-- **框架版本**：DeepSeek Harness `0.2.2-rc.3`（DSH NEXT `2.0.22-next`；`engines.dsh: ">=0.2.2-rc.1 <0.3.0"`）。项目文件夹默认预设使用 0.2.2 的 `agent/created` serial 事件 + `agentPresets.select()`；预设默认模型使用 `agent.model.select()` + `llm.resolveCallConfig()`，0.2.1 及更早版本没有这些组合。
+- **框架版本**：DeepSeek Harness `0.2.2-rc.3`（DSH NEXT `2.0.22-next`；`engines.dsh: ">=0.2.2-rc.1 <0.3.0"`）。项目文件夹默认预设使用 0.2.2 的 `agent/created` serial 事件 + `agentPresets.select()`；预设默认模型使用 `agent.model.select()` + `llm.resolveCallConfig()` + `sessionController.modelCatalog()`，0.2.1 及更早版本没有这些组合。
 - **微内核**：基于 `@deepseek-ai/cordis` `~4.1.0`。
 - **环境要求**：使用桌面版内置 Node（`24.21`）；自行运行 Host 时 Node.js >= `24.9`。
 

@@ -263,6 +263,108 @@ window.__ModuleLoader__.load({
       URL.revokeObjectURL(url);
     }
 
+    // 官方内置预设的默认模型绑定行（官方预设定义只读，只维护模型绑定）
+    function OfficialPresetModelRow({ preset, providers, onSave, disabled }) {
+      const initial = preset.boundModel || null;
+      const [draft, setDraft] = useState(initial);
+      const [saving, setSaving] = useState(false);
+      const [error, setError] = useState("");
+      const providerId = draft && draft.provider ? draft.provider : "";
+      const providerEntry = providers.find((p) => p.id === providerId);
+      const models = providerEntry ? providerEntry.models || [] : [];
+      const modelEntry = models.find((m) => m.id === (draft && draft.model));
+      const efforts = (modelEntry && modelEntry.reasoning && modelEntry.reasoning.efforts) || [];
+      const labelStyle = { display: "block", fontSize: "11px", color: THEME.muted, marginBottom: "4px" };
+
+      const commit = () => {
+        setSaving(true);
+        setError("");
+        Promise.resolve(onSave(preset.id, draft))
+          .then((result) => {
+            if (result && result.ok === false) setError(result.error || "保存失败");
+          })
+          .catch((e) => setError(e && e.message ? e.message : String(e)))
+          .finally(() => setSaving(false));
+      };
+
+      return h("div", { style: Object.assign({}, S.card, { gap: "8px", padding: "12px 14px" }) },
+        h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px" } },
+          h("div", null,
+            h("span", { style: { fontSize: "13px", fontWeight: 600, color: THEME.ink } }, preset.name),
+            h("code", { style: { marginLeft: "8px", fontSize: "11px", color: THEME.muted } }, preset.id),
+            preset.isDefault ? h("span", { style: Object.assign({}, S.badge("rgba(16,185,129,.15)", THEME.success), { marginLeft: "8px" }) }, "DSH 默认") : null,
+          ),
+          h("span", { style: { fontSize: "11px", color: THEME.muted } }, "官方预设 · 只读定义"),
+        ),
+        h("div", { style: { display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(160px, 1fr))", gap: "8px" } },
+          h("div", null,
+            h("label", { style: labelStyle }, "上游 Provider"),
+            h("select", {
+              style: S.input,
+              value: providerId,
+              onChange: (e) => {
+                const nextProvider = e.target.value;
+                if (!nextProvider) { setDraft(null); return; }
+                const firstModel = ((providers.find((p) => p.id === nextProvider) || {}).models || [])[0];
+                setDraft(firstModel ? { provider: nextProvider, model: firstModel.id } : { provider: nextProvider, model: "" });
+              },
+            },
+              h("option", { value: "" }, "不绑定"),
+              providers.map((p) => h("option", { key: p.id, value: p.id }, (p.name || p.id) + "（" + p.id + "）")),
+            ),
+          ),
+          h("div", null,
+            h("label", { style: labelStyle }, "模型"),
+            h("select", {
+              style: S.input,
+              value: (draft && draft.model) || "",
+              disabled: !providerEntry,
+              onChange: (e) => {
+                const modelId = e.target.value;
+                if (!modelId) { setDraft(draft ? { ...draft, model: "" } : null); return; }
+                const entry = models.find((m) => m.id === modelId);
+                const defaultEffort = entry && entry.reasoning && entry.reasoning.defaultEffort;
+                setDraft({ provider: providerId, model: modelId, ...(defaultEffort ? { reasoningEffort: defaultEffort } : {}) });
+              },
+            },
+              h("option", { value: "" }, providerEntry ? "选择模型…" : "先选上游"),
+              models.map((m) => h("option", { key: m.id, value: m.id }, (m.name || m.id) + "（" + m.id + "）")),
+            ),
+          ),
+          h("div", null,
+            h("label", { style: labelStyle }, "思考强度"),
+            h("select", {
+              style: S.input,
+              value: (draft && draft.reasoningEffort) || "",
+              disabled: efforts.length === 0,
+              onChange: (e) => {
+                const effort = e.target.value;
+                setDraft({ provider: providerId, model: (draft && draft.model) || "", ...(effort ? { reasoningEffort: effort } : {}) });
+              },
+            },
+              h("option", { value: "" }, efforts.length ? "跟随模型默认" : "无选项"),
+              efforts.map((effort) => h("option", { key: effort.id, value: effort.id }, (effort.name || effort.id) + "（" + effort.id + "）")),
+            ),
+          ),
+        ),
+        h("div", { style: { display: "flex", gap: "8px", alignItems: "center", flexWrap: "wrap" } },
+          h("button", {
+            style: Object.assign({}, S.btnPrimary, { padding: "5px 12px", fontSize: "12px" }, (disabled || saving) ? { opacity: 0.6, cursor: "default" } : {}),
+            disabled: disabled || saving,
+            onClick: commit,
+          }, saving ? "保存中…" : "保存模型绑定"),
+          draft ? h("button", {
+            style: Object.assign({}, S.btnSecondary, { padding: "5px 12px", fontSize: "12px" }),
+            disabled: disabled || saving,
+            onClick: () => { setDraft(null); setSaving(true); Promise.resolve(onSave(preset.id, null)).catch(() => {}).finally(() => setSaving(false)); },
+          }, "清除") : null,
+          preset.boundModel ? h("code", { style: { fontSize: "11px", color: THEME.warning, wordBreak: "break-all" } },
+            "当前：" + preset.boundModel.provider + "/" + preset.boundModel.model + (preset.boundModel.reasoningEffort ? " · " + preset.boundModel.reasoningEffort : "")) : null,
+          error ? h("span", { style: { fontSize: "12px", color: THEME.danger } }, error) : null,
+        ),
+      );
+    }
+
     function PresetEditorMain() {
       // 视图状态: 'current' (预设列表) | 'edit' (编辑页面) | 'create' (新建页面)
       const [view, setView] = useState("current");
@@ -367,6 +469,30 @@ window.__ModuleLoader__.load({
           })
           .catch((e) => setNotice({ kind: "error", text: "读取模型目录失败: " + e.message }))
           .finally(() => setModelBusy(false));
+      }, []);
+
+      // 保存/清除任意预设（含官方内置）的默认模型绑定
+      const handleSavePresetModel = useCallback((presetId, model) => {
+        return fetch("/dsh-preset-editor/preset-model", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ presetId, model }),
+        })
+          .then((r) => r.json())
+          .then((d) => {
+            if (d.ok) {
+              setDoc(d.doc);
+              setPresetRoster(d.presetRoster || []);
+              setNotice({ kind: "ok", text: `已保存预设 ${presetId} 的默认模型绑定` });
+              return { ok: true };
+            }
+            setNotice({ kind: "error", text: "保存模型绑定失败: " + (d.error || "") });
+            return { ok: false, error: d.error || "保存失败" };
+          })
+          .catch((e) => {
+            setNotice({ kind: "error", text: "保存模型绑定失败: " + e.message });
+            return { ok: false, error: e.message };
+          });
       }, []);
 
       useEffect(() => {
@@ -932,6 +1058,27 @@ window.__ModuleLoader__.load({
               );
             }),
           ),
+          // DSH 官方预设：定义只读，但可以绑定默认模型
+          (() => {
+            const officialRows = (presetRoster || []).filter((row) => row.source === "official");
+            if (officialRows.length === 0) return null;
+            return h("div", { style: { display: "flex", flexDirection: "column", gap: "10px" } },
+              h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px" } },
+                h("div", null,
+                  h("span", { style: { fontSize: "14px", fontWeight: 650, color: THEME.ink } }, "DSH 官方预设"),
+                  h("span", { style: { fontSize: "12px", color: THEME.muted, marginLeft: "8px" } }, "定义只读；可绑定默认模型与思考强度"),
+                ),
+                h("button", { style: S.btnSecondary, onClick: loadModels }, "刷新模型目录"),
+              ),
+              officialRows.map((row) => h(OfficialPresetModelRow, {
+                key: row.id,
+                preset: row,
+                providers: (modelCatalog && modelCatalog.providers) || [],
+                onSave: handleSavePresetModel,
+                disabled: modelBusy,
+              })),
+            );
+          })(),
         );
       };
 

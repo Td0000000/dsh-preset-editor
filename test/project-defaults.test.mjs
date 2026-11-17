@@ -199,6 +199,60 @@ test("importPresetData：整体备份里的官方预设规则需要 isPresetAvai
   assert.equal(doc.projectDefaults.rules[0].presetId, "minimal");
 });
 
+test("presetModels：官方预设也能存默认模型绑定，自定义 model 优先", async () => {
+  writeDoc({ version: 3, presets: { "pi-spider": samplePreset() } });
+  await core.savePresetModel(
+    "minimal",
+    { provider: "opencode-go", model: "claude-haiku-5-5", reasoningEffort: "medium" },
+    { isPresetAvailable: (id) => id === "minimal" || id === "pi-spider" },
+  );
+  let doc = core.loadPresetsDoc();
+  assert.deepEqual(core.findPresetModelBinding(doc, "minimal"), {
+    provider: "opencode-go",
+    model: "claude-haiku-5-5",
+    reasoningEffort: "medium",
+  });
+  assert.equal(core.findPresetModelBinding(doc, "unknown-preset"), undefined);
+
+  // 自定义预设自身的 model 优先于 presetModels
+  await core.savePreset({
+    ...samplePreset("with-model"),
+    model: { provider: "custom-provider", model: "custom-model" },
+  });
+  await core.savePresetModel(
+    "with-model",
+    { provider: "map-provider", model: "map-model" },
+    { isPresetAvailable: () => true },
+  );
+  doc = core.loadPresetsDoc();
+  assert.deepEqual(core.findPresetModelBinding(doc, "with-model"), {
+    provider: "custom-provider",
+    model: "custom-model",
+  });
+
+  // 清除
+  await core.savePresetModel("minimal", null, { isPresetAvailable: () => true });
+  doc = core.loadPresetsDoc();
+  assert.equal(core.findPresetModelBinding(doc, "minimal"), undefined);
+
+  await assert.rejects(
+    core.savePresetModel("ghost", { provider: "p", model: "m" }, { isPresetAvailable: () => false }),
+    /不存在或不可用/,
+  );
+});
+
+test("normalizeDoc：保留 presetModels，坏绑定丢弃", () => {
+  const doc = core.normalizeDoc({
+    version: 3,
+    presets: { "pi-spider": samplePreset() },
+    presetModels: {
+      minimal: { provider: "p", model: "m", reasoningEffort: "high" },
+      broken: { provider: "p" },
+    },
+  });
+  assert.deepEqual(doc.presetModels, { minimal: { provider: "p", model: "m", reasoningEffort: "high" } });
+});
+
 test.after(() => {
   fs.rmSync(tmpHome, { recursive: true, force: true });
 });
