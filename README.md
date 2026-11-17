@@ -93,8 +93,10 @@ DeepSeek Harness 自定义预设可视化编辑插件。
 | 子代理、fork 派生会话（`origin=subagent` / `parentSession` / `isSeeded`） | 继承父级组合，不应用规则 |
 | 已经开始的会话 | 不会中途换预设（DSH 本身也不允许） |
 
-实现方式（只使用官方公开扩展点）：宿主在 `agent/created`（serial 事件，创建返回前）读取 `SessionHeader.cwd`，用 `findProjectRule()` 在规则里做**路径前缀匹配**（相等或子目录，取最长路径），命中且会话空白时调用官方 `ctx.agentPresets.select(agent, presetId)`。选择会按官方规则写入会话日志（`agent-preset/selected`），重启后按 projection 恢复。另有一个兜底：监听 `session/event`，如果 blank 会话被改回官方默认（典型场景是 New Session 复用活着的 blank 会话），就把目录规则再套回去。为了区分“宿主复用重置”和“用户手选官方默认”，插件在启动时给 `sessionController.create()` 包了一层只读标记（插件卸载时还原），只有带 `sessionId` 的复用创建才允许兜底纠正；用户手选（包括选官方默认）一律尊重。插件**从不改写** `agent-preset-registry` 的 `default` / `selectedDefault` 配置，因此不会与 DSH 自己的默认预设冲突。
+实现方式（只使用官方公开扩展点）：宿主在 `agent/created`（serial 事件，创建返回前）读取 `SessionHeader.cwd`，用 `findProjectRule()` 在规则里做**路径前缀匹配**（相等或子目录，取最长路径），命中且会话空白时调用官方 `ctx.agentPresets.select(agent, presetId)`。选择会按官方规则写入会话日志（`agent-preset/selected`），重启后按 projection 恢复。另有一个兜底：监听 `session/event`，如果 blank 会话被改回官方默认（典型场景是 New Session 复用活着的 blank 会话），就把目录规则再套回去。为了区分“宿主复用重置”和“用户手选官方默认”，插件给 `sessionController.create()` 包了一层只读标记（插件卸载时还原）：请求带 `sessionId` 直接标记；真实 UI 复用经常只带 `workspaceId/cwd`，这时靠返回值的落点 `sessionId` 识别，事件比返回先到时会等落定（最多几秒）再判定，精确到会话。用户手选（包括选官方默认）一律尊重；自动纠正后用户立刻手动选回，一次就尊重。插件**从不改写** `agent-preset-registry` 的 `default` / `selectedDefault` 配置，因此不会与 DSH 自己的默认预设冲突。
 
+> **更新插件后请重启 DSH**：宿主侧插件代码在启动时加载；不重启时热更新可能残留旧实例，导致复用兜底等逻辑工作在“半新半旧”状态（v1.10.1 已把复用信号表改为跨实例共享，但重启仍是最稳的）。
+>
 > 匹配细节：Windows 路径不区分大小写、忽略末尾分隔符；父规则默认覆盖所有子目录，子目录规则更具体时优先；单条规则可取消「包含子文件夹」退回精确匹配。相邻但名字前缀相同的目录（如 `ProjOne` 与 `ProjOneSibling`）不会误匹配。
 >
 > 规则保存在 `$DSH_HOME/preset-editor.json` 的 `projectDefaults` 字段里（每条规则含 `subfolders` 开关）；整体导出会带上该字段，导入整体备份时会一并恢复。
@@ -229,6 +231,8 @@ DSH NEXT `2.0.22-next` 把内核升级到 `0.2.2-rc.1`（Cordis `4.1.0`）。本
 
 **v1.9.0 实机验证（18/18）**：官方预设中文名（极简/标准/PTC/Cordis 内核）正确返回；默认预设 minimal 的绑定模型自动套用 → 用户手选 standard 后模型更新为新预设默认值 → 用户再手改模型后切回 minimal，模型保持用户选择；目录规则套用自定义预设后，用户手选官方 minimal 不会被规则改回，且模型切到 minimal 的默认值；复用目录 D 的 blank 会话仍能兜底回规则预设并保持其默认模型；全程全局默认预设保持 minimal。
 
+**v1.10.1 说明**：修复真实复用流程（请求只有 `workspaceId/cwd`、没有 `sessionId`）识别不到宿主重置的问题——改靠 `create()` 返回落点识别（精确到会话）+ 事件早于返回时等落定再判定；修复热更新残留旧实例导致新实例复用信号永远收不到的问题（信号表改为跨实例共享）；自动纠正后用户立刻手选官方默认，一次就尊重。自动化测试 42 项全过。真机复用链路复测待重启后进行（此前热更新污染环境下的数据不可用；fake 覆盖了显式复用/落点复用/先到后落定/用户覆盖四种路径）。
+
 **v1.10.0 实机验证（15/15）**：父规则（测试文件夹 → test-model-a）自动覆盖子文件夹；子目录规则（项目C → test-model-b）就近优先；单条规则关闭「包含子文件夹」（项目D）后，其子目录回退到父规则；工作区外目录保持 minimal 且无模型绑定；以上会话的预设默认模型都正确套用；`/preset-model` 对自定义预设写回 `preset.model` 且名册返回 `boundModel`。测试后还原用户原有规则与预设。
 
 ### 为什么必须每次注入（抗压缩）
@@ -285,7 +289,7 @@ DSH 的压缩（`@deepseek-ai/dsh-compaction-basic`）在 token 压力越过阈�
 
 ### 方式一：让 AI 一键安装（推荐 · 无需编译）
 
-本仓库根目录已附带**编译好的安装包**：[`dsh-preset-editor-1.10.0.tgz`](./dsh-preset-editor-1.10.0.tgz)。它不需要 `pnpm install` / `pnpm run build`，直接安装即可。
+本仓库根目录已附带**编译好的安装包**：[`dsh-preset-editor-1.10.1.tgz`](./dsh-preset-editor-1.10.1.tgz)。它不需要 `pnpm install` / `pnpm run build`，直接安装即可。
 
 把仓库拉到本地后，把下面这段提示词发给你的 AI 编程助手（Pi / Claude Code / Cursor / Windsurf / DSH 内置 Coding Agent）：
 
@@ -294,7 +298,7 @@ DSH 的压缩（`@deepseek-ai/dsh-compaction-basic`）在 token 压力越过阈�
 
 1. 克隆仓库到本地任意目录：git clone https://github.com/Td0000000/dsh-preset-editor.git
 2. 用 DSH 的 plugin_manager 工具执行 install_bundle，target 传仓库根目录里 tgz 的绝对路径，
-   例如 <克隆目录>/dsh-preset-editor-1.10.0.tgz
+   例如 <克隆目录>/dsh-preset-editor-1.10.1.tgz
    （install_bundle 会自动写入 profile 的 dependencies、加入 dsh.profile.bundles 并热重载，
      不需要手改 package.json / cordis.patch.yml / node_modules）
 3. 看到结果里 application=applied 后重启 DSH NEXT（宿主插件代码在启动时加载），

@@ -183,6 +183,11 @@ function makeFakeContext(options = {}) {
     modelSelections,
     emit,
     call,
+    // 模拟会话日志推进：真实会话里 agent-preset/selected 事件本身就是一次日志追加，
+    // 重置后 presetForSession 读到的是默认值；fake 默认不会动，需要测试手动同步。
+    recordPreset: (sid, pid) => {
+      selectedBySession.set(String(sid), pid);
+    },
     cleanup: () => {
       for (const cleanup of cleanups.reverse()) {
         try {
@@ -450,6 +455,156 @@ test("sessionController.create({sessionId}) 复用标记：兜底重新套用目
   await new Promise((resolve) => setTimeout(resolve, 60));
   assert.equal(fake.selectCalls.length, 1);
   assert.equal(fake.selectCalls[0].presetId, "pi-spider");
+  fake.cleanup();
+});
+
+test("真实 UI 复用（请求只有 cwd，没有 sessionId）：靠 create 返回落点兜底", async () => {
+  writeStore({
+    version: 3,
+    presets: { "pi-spider": preset() },
+    projectDefaults: { enabled: true, rules: [{ id: "r1", path: RULE_DIR, presetId: "pi-spider", enabled: true }] },
+  });
+  const session = sessionFor(RULE_DIR);
+  const agent = { id: session.id, session };
+  // 真实 UI 传 workspaceId/cwd，不传 sessionId；宿主在内部挑中已有 blank 并返回它
+  const controller = {
+    async create() {
+      return { sessionId: session.id };
+    },
+  };
+  const fake = makeFakeContext({ agentForSession: () => agent, sessionController: controller });
+  plugin.apply(fake.ctx);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+
+  // 注意：这里不触发 agent/created（复用活着的 blank 没有新 agent）
+  await fake.ctx.get("sessionController").create({ cwd: RULE_DIR });
+  await fake.emit("session/event", session, {
+    type: "agent-preset/selected",
+    data: { agentPreset: "standard" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(fake.selectCalls.length, 1);
+  assert.equal(fake.selectCalls[0].presetId, "pi-spider");
+  fake.cleanup();
+});
+
+test("复用重置发生在 create 返回前：等落定后再按落点纠正", async () => {
+  writeStore({
+    version: 3,
+    presets: { "pi-spider": preset() },
+    projectDefaults: { enabled: true, rules: [{ id: "r1", path: RULE_DIR, presetId: "pi-spider", enabled: true }] },
+  });
+  const session = sessionFor(RULE_DIR);
+  const agent = { id: session.id, session };
+  let release;
+  const gate = new Promise((resolve) => {
+    release = resolve;
+  });
+  const controller = {
+    async create() {
+      await gate;
+      return { sessionId: session.id };
+    },
+  };
+  const fake = makeFakeContext({ agentForSession: () => agent, sessionController: controller });
+  plugin.apply(fake.ctx);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+
+  // create 还没返回（事件先于 settle）：兜底等落定后按落点识别
+  // （兜底轮询约 100ms 一次，这里多等一会儿；真机上这点延迟用户感知不到）
+  const pending = fake.ctx.get("sessionController").create({ cwd: RULE_DIR });
+  await fake.emit("session/event", session, {
+    type: "agent-preset/selected",
+    data: { agentPreset: "standard" },
+  });
+  release();
+  await pending;
+  await new Promise((resolve) => setTimeout(resolve, 800));
+  assert.equal(fake.selectCalls.length, 1);
+  assert.equal(fake.selectCalls[0].presetId, "pi-spider");
+  fake.cleanup();
+});
+
+test("无关会话的 create 落点不会导致纠正（用户手选优先）", async () => {
+  writeStore({
+    version: 3,
+    presets: { "pi-spider": preset() },
+    projectDefaults: { enabled: true, rules: [{ id: "r1", path: RULE_DIR, presetId: "pi-spider", enabled: true }] },
+  });
+  const session = sessionFor(RULE_DIR);
+  const agent = { id: session.id, session };
+  const controller = {
+    async create() {
+      return { sessionId: "session-unrelated" };
+    },
+  };
+  const fake = makeFakeContext({
+    agentForSession: () => agent,
+    sessionController: controller,
+    currentPreset: () => "other",
+  });
+  plugin.apply(fake.ctx);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+
+  // 全新会话：agent/created 先跑（用户在顶部手选了 other，规则尊重不覆盖）
+  await fake.emit("agent/created", { agent, source: "startup" });
+  assert.equal(fake.selectCalls.length, 0);
+  // 之后别处的一次 create（无显式预设）留下 activity；用户在这条会话手选官方默认
+  await fake.ctx.get("sessionController").create({ cwd: "C:\\other" });
+  await fake.emit("session/event", session, {
+    type: "agent-preset/selected",
+    data: { agentPreset: "standard" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(fake.selectCalls.length, 0, "全新会话的手选不应被 activity 兜底改写");
+  fake.cleanup();
+});
+
+test("自动纠正后用户立刻手选官方默认：一次就尊重；再复用仍纠正", async () => {
+  writeStore({
+    version: 3,
+    presets: { "pi-spider": preset() },
+    projectDefaults: { enabled: true, rules: [{ id: "r1", path: RULE_DIR, presetId: "pi-spider", enabled: true }] },
+  });
+  const session = sessionFor(RULE_DIR);
+  const agent = { id: session.id, session };
+  const controller = {
+    async create() {
+      return { sessionId: session.id };
+    },
+  };
+  const fake = makeFakeContext({ agentForSession: () => agent, sessionController: controller });
+  plugin.apply(fake.ctx);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+
+  // 第一次复用重置 -> 纠正回 pi-spider
+  await fake.ctx.get("sessionController").create({ cwd: RULE_DIR });
+  await fake.emit("session/event", session, {
+    type: "agent-preset/selected",
+    data: { agentPreset: "standard" },
+  });
+  fake.recordPreset(session.id, "standard");
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(fake.selectCalls.length, 1);
+
+  // 用户立刻手动选回官方默认（无新的 create）-> 尊重，不再改写
+  await fake.emit("session/event", session, {
+    type: "agent-preset/selected",
+    data: { agentPreset: "standard" },
+  });
+  fake.recordPreset(session.id, "standard");
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(fake.selectCalls.length, 1, "用户覆盖自动纠正后不应再改写");
+
+  // 再次复用（新的 create 周期）-> 仍纠正
+  await fake.ctx.get("sessionController").create({ cwd: RULE_DIR });
+  await fake.emit("session/event", session, {
+    type: "agent-preset/selected",
+    data: { agentPreset: "standard" },
+  });
+  fake.recordPreset(session.id, "standard");
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(fake.selectCalls.length, 2);
   fake.cleanup();
 });
 
