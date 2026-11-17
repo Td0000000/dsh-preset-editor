@@ -4,7 +4,9 @@ DeepSeek Harness 自定义预设可视化编辑插件。
 
 支持对自定义 Agent 预设进行可视化创建、编辑、管理与导入导出，支持 `system`、`user`、`assistant` 消息编排，支持自主配备 AI 工具，直接融入官方 Agent 预设体系，新会话一键选择即可生效。
 
-> **本版本（v1.8.0）适配 DSH NEXT `2.0.22-next`（内核 DeepSeek Harness `0.2.2-rc.3`）**（见下方「0.2.2 适配说明」及历史适配记录）。
+> **本版本（v1.9.0）适配 DSH NEXT `2.0.22-next`（内核 DeepSeek Harness `0.2.2-rc.3`）**（见下方「0.2.2 适配说明」及历史适配记录）。
+>
+> 1.9.0 更新：①官方内置预设在本插件 UI 里显示中文名（标准 / 极简 / PTC 程序化工具调用 / Cordis 内核）；②明确并实现“预设和模型都只是默认值”——用户在新会话里手动改过预设或模型后，目录规则和预设默认模型都不再覆盖；③修复“用户手选官方默认预设会被目录规则改回”的问题（复用 blank 会话时的宿主重置仍会自动兜底）。
 >
 > 1.8.0 新增：**任意预设（含 DSH 官方内置）都可以绑定默认上游模型与思考强度**。自定义预设在编辑页底部设置；官方内置预设在「当前预设」页的官方预设列表里设置。模型列表来自 DSH 当前已配置的上游。
 >
@@ -85,19 +87,21 @@ DeepSeek Harness 自定义预设可视化编辑插件。
 | 子代理、fork 派生会话（`origin=subagent` / `parentSession` / `isSeeded`） | 继承父级组合，不应用规则 |
 | 已经开始的会话 | 不会中途换预设（DSH 本身也不允许） |
 
-实现方式（只使用官方公开扩展点）：宿主在 `agent/created`（serial 事件，创建返回前）读取 `SessionHeader.cwd`，命中规则且会话空白时调用官方 `ctx.agentPresets.select(agent, presetId)`。选择会按官方规则写入会话日志（`agent-preset/selected`），重启后按 projection 恢复。另有一个兜底：监听 `session/event`，如果 blank 会话被改回官方默认（典型场景是 New Session 复用活着的 blank 会话），就把目录规则再套回去。插件**从不改写** `agent-preset-registry` 的 `default` / `selectedDefault` 配置，因此不会与 DSH 自己的默认预设冲突。
+实现方式（只使用官方公开扩展点）：宿主在 `agent/created`（serial 事件，创建返回前）读取 `SessionHeader.cwd`，命中规则且会话空白时调用官方 `ctx.agentPresets.select(agent, presetId)`。选择会按官方规则写入会话日志（`agent-preset/selected`），重启后按 projection 恢复。另有一个兜底：监听 `session/event`，如果 blank 会话被改回官方默认（典型场景是 New Session 复用活着的 blank 会话），就把目录规则再套回去。为了区分“宿主复用重置”和“用户手选官方默认”，插件在启动时给 `sessionController.create()` 包了一层只读标记（插件卸载时还原），只有带 `sessionId` 的复用创建才允许兜底纠正；用户手选（包括选官方默认）一律尊重。插件**从不改写** `agent-preset-registry` 的 `default` / `selectedDefault` 配置，因此不会与 DSH 自己的默认预设冲突。
 
 > 注意：目录匹配是**完全一致**（Windows 不区分大小写、忽略末尾分隔符），不做父目录/子目录继承；需要多个目录时逐条添加。
 >
 > 规则保存在 `$DSH_HOME/preset-editor.json` 的 `projectDefaults` 字段里；整体导出会带上该字段，导入整体备份时会一并恢复。
 
-### 预设默认模型与思考强度（v1.7.0 新增，v1.8.0 扩展到官方预设）
+### 预设默认模型与思考强度（v1.7.0 新增，v1.8.0 扩展到官方预设，v1.9.0 明确“默认值”语义）
 
 - **自定义预设**：在「新建预设 / 编辑预设」页面底部设置「默认模型与思考强度」：上游 Provider → 模型 → 思考强度（可选「跟随模型默认」）。
-- **官方内置预设**：在「当前预设」页面下方「DSH 官方预设」区域逐个设置（官方定义只读，只维护模型绑定）。
+- **官方内置预设**：在「当前预设」页面下方「DSH 官方预设」区域逐个设置（官方定义只读，只维护模型绑定）。本插件 UI 里官方预设显示中文名：标准 / 极简 / PTC 程序化工具调用 / Cordis 内核（DSH 自己右上角预设选择器里的名字不受影响）。
 - 数据存储：自定义预设写在预设对象的 `model` 字段（`{ provider, model, reasoningEffort? }`，随预设导出/导入）；官方预设写在文档级 `presetModels: { [presetId]: {...} }`；自定义预设的 `model` 优先。
-- 生效时机：会话使用该预设、且**还没有显式模型选择**时，写入当前会话的模型选择（`agent.model.select()`，即会话日志里的 `model/selection`）。覆盖两条路径：目录规则自动切到该预设；用户在新会话顶部手选该预设。
-- 不生效：会话已有显式模型选择（例如用户手动改过模型）；模型未在 DSH 上游目录里 / provider 未配置 / 思考强度不被支持 → 跳过并记录诊断，会话保持当前模型。
+- **只是默认值**：会话使用该预设、且还没有“用户自己选的模型”时，写入当前会话的模型选择（`agent.model.select()`）。以下情况不生效：
+  - 用户手动改过模型 → 保持用户选择，之后再切预设也不覆盖；
+  - 用户在会话里手动换过预设 → 预设跟随用户，模型默认只在“之前记录的就是插件自动写入的默认值”时更新（例如切换预设会带出新预设的默认模型）；
+  - 模型未在 DSH 上游目录里 / provider 未配置 / 思考强度不被支持 → 跳过并记录诊断，会话保持当前模型。
 - **不会改 DSH 全局默认模型**：没有调用会保存全局默认的接口，只写当前会话。
 - 保存时按当前模型目录校验展示；运行时会再校验一次，避免上游配置变更后预设不可用。
 - 接口：`GET /dsh-preset-editor/models` 拉上游模型目录；`POST /dsh-preset-editor/preset-model` 保存/清除任意预设（含官方）的模型绑定。
@@ -218,6 +222,8 @@ DSH NEXT `2.0.22-next` 把内核升级到 `0.2.2-rc.1`（Cordis `4.1.0`）。本
 
 **v1.8.0 补充实机验证（6/6）**：给官方预设 `minimal` 绑定 `opencode-go/claude-haiku-5-5 + medium`、给 `standard` 绑定 `cpa/nvidia-glm-5.3-flash + high` → 新建会话（默认 minimal / 显式 standard）的 `modelSelection.next` 分别与绑定一致；清除绑定后 `presetModels` 恢复为空。测试后已还原，未留下测试配置。
 
+**v1.9.0 实机验证（18/18）**：官方预设中文名（极简/标准/PTC/Cordis 内核）正确返回；默认预设 minimal 的绑定模型自动套用 → 用户手选 standard 后模型更新为新预设默认值 → 用户再手改模型后切回 minimal，模型保持用户选择；目录规则套用自定义预设后，用户手选官方 minimal 不会被规则改回，且模型切到 minimal 的默认值；复用目录 D 的 blank 会话仍能兜底回规则预设并保持其默认模型；全程全局默认预设保持 minimal。
+
 ### 为什么必须每次注入（抗压缩）
 
 DSH 的压缩（`@deepseek-ai/dsh-compaction-basic`）在 token 压力越过阈值时，
@@ -257,7 +263,8 @@ DSH 的压缩（`@deepseek-ai/dsh-compaction-basic`）在 token 压力越过阈�
 - 子代理的路由字段只开在 `subagent`（spawn）实例上；`subagent_fork` 按官方约定不提供模型选择字段。
 - **升级到 0.2.2 后必须先更新插件再使用**：旧版 1.4.x 在 0.2.2 下会让预设挂载失败（`tool-subagent-list-agents` 行已不存在）。本插件宿主代码在启动时加载，更新插件后需要重启 DSH NEXT（或按插件页提示重启）才会生效。
 - 「按项目文件夹默认预设」只处理**空白会话**（未开始第一轮）。已经开始的会话无法中途换预设，这是 DSH 自身的约束。
-- 所谓“用户手动选择优先”依赖会话已记录了一个**不同于 DSH 默认值**的预设；如果用户手选的恰好就是 DSH 默认值，规则仍会把它换成文件夹预设（无法区分“没选”与“显式选了默认”）。
+- 用户手动选择优先现在是完整语义：手选任何预设（包括官方默认）都不会被目录规则改回；只有宿主在“复用 blank 会话”时做的自动重置才会被规则兜底纠正（通过包装 `sessionController.create` 识别，不依赖调用栈）。
+- 官方预设的中文名只用于本插件 UI（下拉、列表、诊断）；DSH 自己右上角的预设选择器仍显示官方原名（`minimal` / `standard` 等），本插件不改官方定义。
 - 目录规则是**完全匹配**，不是父目录继承；规则只在会话工作目录与该路径一致时生效。
 - 主会话之外（子代理、fork、定时任务恢复的派生会话等）不会应用项目规则。
 - 预设默认模型绑定只在**会话还没有显式模型选择**时生效；用户手动改过模型的会话不会被覆盖（复用 blank 会话时也一样）。
@@ -271,7 +278,7 @@ DSH 的压缩（`@deepseek-ai/dsh-compaction-basic`）在 token 压力越过阈�
 
 ### 方式一：让 AI 一键安装（推荐 · 无需编译）
 
-本仓库根目录已附带**编译好的安装包**：[`dsh-preset-editor-1.8.0.tgz`](./dsh-preset-editor-1.8.0.tgz)。它不需要 `pnpm install` / `pnpm run build`，直接安装即可。
+本仓库根目录已附带**编译好的安装包**：[`dsh-preset-editor-1.9.0.tgz`](./dsh-preset-editor-1.9.0.tgz)。它不需要 `pnpm install` / `pnpm run build`，直接安装即可。
 
 把仓库拉到本地后，把下面这段提示词发给你的 AI 编程助手（Pi / Claude Code / Cursor / Windsurf / DSH 内置 Coding Agent）：
 
@@ -280,7 +287,7 @@ DSH 的压缩（`@deepseek-ai/dsh-compaction-basic`）在 token 压力越过阈�
 
 1. 克隆仓库到本地任意目录：git clone https://github.com/Td0000000/dsh-preset-editor.git
 2. 用 DSH 的 plugin_manager 工具执行 install_bundle，target 传仓库根目录里 tgz 的绝对路径，
-   例如 <克隆目录>/dsh-preset-editor-1.8.0.tgz
+   例如 <克隆目录>/dsh-preset-editor-1.9.0.tgz
    （install_bundle 会自动写入 profile 的 dependencies、加入 dsh.profile.bundles 并热重载，
      不需要手改 package.json / cordis.patch.yml / node_modules）
 3. 看到结果里 application=applied 后重启 DSH NEXT（宿主插件代码在启动时加载），

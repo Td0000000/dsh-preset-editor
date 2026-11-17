@@ -11,6 +11,7 @@ const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), "dsh-preset-editor-host-")
 process.env.DSH_HOME = tmpHome;
 const core = await import("../lib/core.js");
 const plugin = await import("../lib/index.js");
+const { callAsSessionCreate } = await import("./fixtures/dsh-api-session-controller/select.mjs");
 
 const RULE_DIR = path.resolve(tmpHome, "project-a");
 const OTHER_DIR = path.resolve(tmpHome, "project-b");
@@ -131,6 +132,7 @@ function makeFakeContext(options = {}) {
       if (name === "profileContext") return undefined;
       if (name === "webServer") return host;
       if (name === "sessionProjections") return sessionProjections;
+      if (name === "sessionController") return options.sessionController;
       return undefined;
     },
     agentPresets,
@@ -207,7 +209,7 @@ test("agent/created：命中规则 + blank + 默认预设 -> 调用 select，并
   });
   const fake = makeFakeContext();
   plugin.apply(fake.ctx);
-  await new Promise((resolve) => setTimeout(resolve, 30)); // 等 registry.sync 完成
+  await new Promise((resolve) => setTimeout(resolve, 80)); // 等 registry.sync 完成
 
   const session = sessionFor(RULE_DIR);
   await fake.emit("agent/created", { agent: { id: session.id, session }, source: "startup" });
@@ -234,7 +236,7 @@ test("总开关关闭 / 目录未命中 / 规则停用：不 select", async () =
     writeStore({ ...base, projectDefaults });
     const fake = makeFakeContext();
     plugin.apply(fake.ctx);
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await new Promise((resolve) => setTimeout(resolve, 80));
     const session = sessionFor(RULE_DIR);
     await fake.emit("agent/created", { agent: { id: session.id, session }, source: "startup" });
     assert.equal(fake.selectCalls.length, 0, JSON.stringify(projectDefaults));
@@ -250,7 +252,7 @@ test("用户手选了其他预设：尊重用户，不 select", async () => {
   });
   const fake = makeFakeContext({ currentPreset: () => "other" });
   plugin.apply(fake.ctx);
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await new Promise((resolve) => setTimeout(resolve, 80));
   const session = sessionFor(RULE_DIR);
   await fake.emit("agent/created", { agent: { id: session.id, session }, source: "startup" });
   assert.equal(fake.selectCalls.length, 0);
@@ -277,7 +279,7 @@ test("子代理 / fork / 非 blank 会话：不 select", async () => {
   for (const scenario of scenarios) {
     const fake = makeFakeContext({ boundaryFor: () => scenario.boundary });
     plugin.apply(fake.ctx);
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await new Promise((resolve) => setTimeout(resolve, 80));
     await fake.emit("agent/created", { agent: { id: scenario.session.id, session: scenario.session }, source: "startup" });
     assert.equal(fake.selectCalls.length, 0);
     fake.cleanup();
@@ -292,7 +294,7 @@ test("规则预设被删除 / 挂载失败：跳过并记录原因", async () =>
   });
   const fake = makeFakeContext();
   plugin.apply(fake.ctx);
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await new Promise((resolve) => setTimeout(resolve, 80));
   const session = sessionFor(RULE_DIR);
   await fake.emit("agent/created", { agent: { id: session.id, session }, source: "startup" });
   assert.equal(fake.selectCalls.length, 0);
@@ -305,7 +307,7 @@ test("HTTP：POST /projects 保存规则、GET /state 与 /project-default 反�
   writeStore({ version: 3, presets: { "pi-spider": preset() }, projectDefaults: { enabled: false, rules: [] } });
   const fake = makeFakeContext();
   plugin.apply(fake.ctx);
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await new Promise((resolve) => setTimeout(resolve, 80));
 
   const before = await fake.call("/dsh-preset-editor/project-default", {
     url: "/dsh-preset-editor/project-default?cwd=" + encodeURIComponent(RULE_DIR),
@@ -353,10 +355,15 @@ test("blank 会话被重置回官方默认时，重新套用目录规则（复�
   const agent = { id: session.id, session };
   const fake = makeFakeContext({ agentForSession: () => agent });
   plugin.apply(fake.ctx);
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await new Promise((resolve) => setTimeout(resolve, 80));
 
   // 模拟宿主复用 live blank 会话时把预设重置回官方默认 standard
-  await fake.emit("session/event", session, { type: "agent-preset/selected", data: { agentPreset: "standard" } });
+  await callAsSessionCreate(() =>
+    fake.emit("session/event", session, {
+      type: "agent-preset/selected",
+      data: { agentPreset: "standard" },
+    }),
+  );
   await new Promise((resolve) => setTimeout(resolve, 40));
 
   assert.equal(fake.selectCalls.length, 1);
@@ -364,6 +371,64 @@ test("blank 会话被重置回官方默认时，重新套用目录规则（复�
   const state = await fake.call("/dsh-preset-editor/state");
   assert.equal(state.json.projectRuntime.applied[0].reason, "blank 会话被重置回官方默认，重新套用目录规则");
   fake.cleanup();
+});
+
+test("用户手选官方默认预设：属于用户选择，目录规则不纠正", async () => {
+  writeStore({
+    version: 3,
+    presets: { "pi-spider": preset() },
+    projectDefaults: { enabled: true, rules: [{ id: "r1", path: RULE_DIR, presetId: "pi-spider", enabled: true }] },
+  });
+  const session = sessionFor(RULE_DIR);
+  const agent = { id: session.id, session };
+  const fake = makeFakeContext({ agentForSession: () => agent });
+  plugin.apply(fake.ctx);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+
+  // 不在 sessionController.create 的调用栈里 -> 视为用户在新会话顶部手选官方默认
+  await fake.emit("session/event", session, {
+    type: "agent-preset/selected",
+    data: { agentPreset: "standard" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 60));
+
+  assert.equal(fake.selectCalls.length, 0, "用户手选官方默认时不应被目录规则改写");
+  fake.cleanup();
+});
+
+test("sessionController.create({sessionId}) 复用标记：兜底重新套用目录规则", async () => {
+  writeStore({
+    version: 3,
+    presets: { "pi-spider": preset() },
+    projectDefaults: { enabled: true, rules: [{ id: "r1", path: RULE_DIR, presetId: "pi-spider", enabled: true }] },
+  });
+  const session = sessionFor(RULE_DIR);
+  const agent = { id: session.id, session };
+  const controller = {
+    async create() {
+      return { sessionId: session.id };
+    },
+  };
+  const fake = makeFakeContext({ agentForSession: () => agent, sessionController: controller });
+  plugin.apply(fake.ctx);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+
+  // 插件应已包装 create：调用（模拟复用 blank 会话）后事件会被识别为宿主重置
+  await fake.ctx.get("sessionController").create({ sessionId: session.id });
+  await fake.emit("session/event", session, {
+    type: "agent-preset/selected",
+    data: { agentPreset: "standard" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(fake.selectCalls.length, 1);
+  assert.equal(fake.selectCalls[0].presetId, "pi-spider");
+  fake.cleanup();
+});
+
+test("预设选择来源判定：只有 sessionController.create 的栈才算宿主重置", () => {
+  assert.equal(plugin.presetSelectionCameFromSessionCreate("at foo (dsh-api-session-controller/lib/index.js:1:1)"), true);
+  assert.equal(plugin.presetSelectionCameFromSessionCreate("at bar (dsh-agent-preset-registry/lib/index.js:1:1)"), false);
+  assert.equal(plugin.presetSelectionCameFromSessionCreate(undefined), false);
 });
 
 test("用户手选其它预设 / 自己写入规则预设时，兜底不动作", async () => {
@@ -378,7 +443,7 @@ test("用户手选其它预设 / 自己写入规则预设时，兜底不动作",
     const agent = { id: session.id, session };
     const fake = makeFakeContext({ agentForSession: () => agent });
     plugin.apply(fake.ctx);
-    await new Promise((resolve) => setTimeout(resolve, 30));
+    await new Promise((resolve) => setTimeout(resolve, 80));
     await fake.emit("session/event", session, { type: "agent-preset/selected", data: { agentPreset: next } });
     await new Promise((resolve) => setTimeout(resolve, 40));
     assert.equal(fake.selectCalls.length, 0, `next=${next}`);
@@ -399,7 +464,7 @@ test("非 blank 会话被重置回默认时，兜底不动作（select 会 locke
     boundaryFor: () => ({ openTurnStartSeq: null, lastTurn: 2 }),
   });
   plugin.apply(fake.ctx);
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await new Promise((resolve) => setTimeout(resolve, 80));
   await fake.emit("session/event", session, { type: "agent-preset/selected", data: { agentPreset: "standard" } });
   await new Promise((resolve) => setTimeout(resolve, 40));
   assert.equal(fake.selectCalls.length, 0);
@@ -417,7 +482,7 @@ test("官方内置预设可以作为目录规则目标，并真实调用 select"
   });
   const fake = makeFakeContext({ defaultId: "minimal" });
   plugin.apply(fake.ctx);
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await new Promise((resolve) => setTimeout(resolve, 80));
 
   const session = sessionFor(RULE_DIR);
   await fake.emit("agent/created", { agent: { id: session.id, session }, source: "startup" });
@@ -456,7 +521,7 @@ test("预设绑定的默认模型会在会话创建（规则套用预设后）�
   const agent = { id: session.id, session, model: { select: (selection) => fake.modelSelections.push(selection) } };
   const fake = makeFakeContext({ agentForSession: () => agent });
   plugin.apply(fake.ctx);
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await new Promise((resolve) => setTimeout(resolve, 80));
 
   await fake.emit("agent/created", { agent, source: "startup" });
 
@@ -497,7 +562,7 @@ test("会话已有显式模型选择时，不覆盖预设绑定模型", async ()
     },
   });
   plugin.apply(fake.ctx);
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await new Promise((resolve) => setTimeout(resolve, 80));
 
   await fake.emit("agent/created", { agent, source: "startup" });
 
@@ -526,7 +591,7 @@ test("预设绑定的模型不可用时跳过并记录诊断", async () => {
     unavailableModels: ["opencode-go/gone-model"],
   });
   plugin.apply(fake.ctx);
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await new Promise((resolve) => setTimeout(resolve, 80));
 
   await fake.emit("agent/created", { agent, source: "startup" });
 
@@ -559,7 +624,7 @@ test("用户手选自定义预设（agent-preset/selected）后也会套用绑�
     currentPreset: () => currentRef.value,
   });
   plugin.apply(fake.ctx);
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await new Promise((resolve) => setTimeout(resolve, 80));
 
   // 模拟官方客户端手选预设后，会话 projection 已经更新为 pi-spider
   currentRef.value = "pi-spider";
@@ -590,7 +655,7 @@ test("HTTP /projects 允许保存官方预设规则，未知预设仍拒绝", as
     ],
   });
   plugin.apply(fake.ctx);
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await new Promise((resolve) => setTimeout(resolve, 80));
 
   const official = await fake.call("/dsh-preset-editor/projects", {
     method: "POST",
@@ -636,7 +701,7 @@ test("官方内置预设也能绑定默认模型（presetModels 映射），会�
   const agent = { id: session.id, session, model: { select: (selection) => fake.modelSelections.push(selection) } };
   const fake = makeFakeContext({ agentForSession: () => agent, defaultId: "minimal" });
   plugin.apply(fake.ctx);
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await new Promise((resolve) => setTimeout(resolve, 80));
 
   await fake.emit("agent/created", { agent, source: "startup" });
 
@@ -655,7 +720,7 @@ test("HTTP /preset-model：可以给官方预设保存/清除默认模型绑定"
   });
   const fake = makeFakeContext();
   plugin.apply(fake.ctx);
-  await new Promise((resolve) => setTimeout(resolve, 30));
+  await new Promise((resolve) => setTimeout(resolve, 80));
 
   const saved = await fake.call("/dsh-preset-editor/preset-model", {
     method: "POST",
@@ -690,6 +755,100 @@ test("HTTP /preset-model：可以给官方预设保存/清除默认模型绑定"
     body: { presetId: "ghost", model: { provider: "p", model: "m" } },
   });
   assert.equal(unknown.status, 400);
+  fake.cleanup();
+});
+
+test("官方内置预设显示中文名（UI 名册），但仍以 raw id 工作", async () => {
+  writeStore({ version: 3, presets: { "pi-spider": preset() }, projectDefaults: { enabled: false, rules: [] } });
+  const fake = makeFakeContext();
+  plugin.apply(fake.ctx);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+  const state = await fake.call("/dsh-preset-editor/state");
+  const minimal = state.json.presetRoster.find((row) => row.id === "minimal");
+  assert.equal(minimal.displayName, "极简");
+  assert.equal(minimal.source, "official");
+  assert.match(minimal.displayDescription, /极简/);
+  fake.cleanup();
+});
+
+test("模型只是默认值：预设切换时更新自动默认，用户改过模型后不再覆盖", async () => {
+  writeStore({
+    version: 3,
+    presets: {
+      "preset-a": preset("preset-a", "Preset A", {
+        provider: "opencode-go",
+        model: "claude-haiku-5-5",
+        reasoningEffort: "medium",
+      }),
+      "preset-b": preset("preset-b", "Preset B", {
+        provider: "cpa",
+        model: "nvidia-glm-5.3-flash",
+        reasoningEffort: "high",
+      }),
+    },
+    projectDefaults: {
+      enabled: true,
+      rules: [{ id: "r1", path: RULE_DIR, presetId: "preset-a", enabled: true }],
+    },
+  });
+  const session = sessionFor(RULE_DIR);
+  const modelState = { value: null };
+  const agent = {
+    id: session.id,
+    session,
+    model: {
+      select: (selection) => {
+        fake.modelSelections.push(selection);
+        modelState.value = { lastUsed: null, next: selection };
+      },
+    },
+  };
+  const currentRef = { value: "standard" };
+  const fake = makeFakeContext({
+    agentForSession: () => agent,
+    currentPreset: () => currentRef.value,
+    sessionProjections: {
+      snapshot: () => ({ values: { modelSelection: modelState.value } }),
+    },
+  });
+  plugin.apply(fake.ctx);
+  await new Promise((resolve) => setTimeout(resolve, 80));
+
+  // 1) 新会话：目录规则切 preset-a，套用它的默认模型 M1
+  await fake.emit("agent/created", { agent, source: "startup" });
+  assert.equal(fake.selectCalls.at(-1).presetId, "preset-a");
+  assert.deepEqual(fake.modelSelections.at(-1), {
+    provider: "opencode-go",
+    model: "claude-haiku-5-5",
+    reasoningEffort: "medium",
+  });
+
+  // 2) 用户切换预设到 preset-b：之前是自动默认，允许更新为 M2
+  await fake.ctx.agentPresets.select(agent, "preset-b");
+  currentRef.value = "preset-b";
+  await fake.emit("session/event", session, {
+    type: "agent-preset/selected",
+    data: { agentPreset: "preset-b" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.deepEqual(fake.modelSelections.at(-1), {
+    provider: "cpa",
+    model: "nvidia-glm-5.3-flash",
+    reasoningEffort: "high",
+  });
+
+  // 3) 用户手动改模型（模拟 UI 选模型，更新 projection）：之后切预设不应覆盖
+  const userSelection = { provider: "opencode-go", model: "muse-spark-1.3-contributor", reasoningEffort: "low" };
+  modelState.value = { lastUsed: null, next: userSelection };
+  await fake.ctx.agentPresets.select(agent, "preset-a");
+  currentRef.value = "preset-a";
+  const before = fake.modelSelections.length;
+  await fake.emit("session/event", session, {
+    type: "agent-preset/selected",
+    data: { agentPreset: "preset-a" },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  assert.equal(fake.modelSelections.length, before, "用户改过模型后不应再自动覆盖");
   fake.cleanup();
 });
 

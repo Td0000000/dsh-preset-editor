@@ -290,9 +290,10 @@ window.__ModuleLoader__.load({
       return h("div", { style: Object.assign({}, S.card, { gap: "8px", padding: "12px 14px" }) },
         h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "8px" } },
           h("div", null,
-            h("span", { style: { fontSize: "13px", fontWeight: 600, color: THEME.ink } }, preset.name),
+            h("span", { style: { fontSize: "13px", fontWeight: 600, color: THEME.ink } }, preset.displayName || preset.name),
             h("code", { style: { marginLeft: "8px", fontSize: "11px", color: THEME.muted } }, preset.id),
             preset.isDefault ? h("span", { style: Object.assign({}, S.badge("rgba(16,185,129,.15)", THEME.success), { marginLeft: "8px" }) }, "DSH 默认") : null,
+            preset.displayDescription ? h("div", { style: { fontSize: "11px", color: THEME.muted, marginTop: "2px" } }, preset.displayDescription) : null,
           ),
           h("span", { style: { fontSize: "11px", color: THEME.muted } }, "官方预设 · 只读定义"),
         ),
@@ -1097,13 +1098,15 @@ window.__ModuleLoader__.load({
         const presetOptions = rosterRows.map((row) => ({
           id: row.id,
           name: row.name || row.id,
+          displayName: row.displayName || row.name || row.id,
+          displayDescription: row.displayDescription || row.description || "",
           source: row.source || "custom",
           broken: row.broken || null,
           isDefault: row.isDefault === true,
         }));
         const optionLabel = (option) =>
           (option.source === "official" ? "【官方】" : "【自定义】") +
-          (option.name || option.id) +
+          (option.displayName || option.name || option.id) +
           "（" +
           option.id +
           "）" +
