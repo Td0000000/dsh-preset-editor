@@ -384,6 +384,8 @@ window.__ModuleLoader__.load({
       const [showToolsModal, setShowToolsModal] = useState(false);
       const [showVariablesModal, setShowVariablesModal] = useState(false);
       const [deleteConfirmId, setDeleteConfirmId] = useState(null);
+      // 新建时 ID 撞车：{ id, name }，需要用户显式选择另存为或覆盖
+      const [saveConflict, setSaveConflict] = useState(null);
 
       // 项目文件夹默认预设：本地编辑草稿 + 宿主运行时信息
       const [projectDraft, setProjectDraft] = useState(null);
@@ -532,6 +534,7 @@ window.__ModuleLoader__.load({
         });
         setView("create");
         setNotice({ kind: "idle", text: "" });
+        setSaveConflict(null);
       };
 
       // 进入编辑预设页面
@@ -547,6 +550,7 @@ window.__ModuleLoader__.load({
         setDraft(copy);
         setView("edit");
         setNotice({ kind: "idle", text: "" });
+        setSaveConflict(null);
       };
 
       // 取消编辑/新建，返回当前预设页面
@@ -556,6 +560,47 @@ window.__ModuleLoader__.load({
       };
 
       // 保存预设
+      // - 编辑已有预设：onConflict=overwrite（这就是"编辑"的语义）
+      // - 新建预设：onConflict=error，ID 撞车时让用户显式选择「覆盖」或「另存为」
+      const submitPreset = (onConflict) => {
+        const idClean = draft.id.trim().toLowerCase();
+        setBusy(true);
+        return fetch("/dsh-preset-editor/save", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            preset: {
+              ...draft,
+              id: idClean,
+              model: draft.model && draft.model.provider && draft.model.model
+                ? {
+                    provider: draft.model.provider,
+                    model: draft.model.model,
+                    ...(draft.model.reasoningEffort
+                      ? { reasoningEffort: draft.model.reasoningEffort }
+                      : {}),
+                  }
+                : null,
+            },
+            onConflict,
+          }),
+        })
+          .then((r) => r.json())
+          .then((d) => {
+            if (d.ok) {
+              setDoc(d.doc);
+              setNotice({ kind: "ok", text: `预设【${draft.name}】已成功保存并同步，新对话即可生效！` });
+              setView("current");
+              setDraft(null);
+              setSaveConflict(null);
+            } else {
+              setNotice({ kind: "error", text: "保存失败: " + (d.error || "") });
+            }
+          })
+          .catch((e) => setNotice({ kind: "error", text: "保存请求失败: " + e.message }))
+          .finally(() => setBusy(false));
+      };
+
       const handleSave = () => {
         if (!draft) return;
         const idClean = draft.id.trim().toLowerCase();
@@ -619,30 +664,25 @@ window.__ModuleLoader__.load({
           return;
         }
 
-        setBusy(true);
-        fetch("/dsh-preset-editor/save", {
-          method: "POST",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            preset: { ...draft, id: idClean, model: boundModel },
-          }),
-        })
-          .then((r) => r.json())
-          .then((d) => {
-            if (d.ok) {
-              setDoc(d.doc);
-              setNotice({ kind: "ok", text: `预设【${draft.name}】已成功保存并同步，新对话即可生效！` });
-              setView("current");
-              setDraft(null);
-            } else {
-              setNotice({ kind: "error", text: "保存失败: " + (d.error || "") });
-            }
-          })
-          .catch((e) => setNotice({ kind: "error", text: "保存请求失败: " + e.message }))
-          .finally(() => setBusy(false));
+        // 新建模式先做本地撞车预检：明确告知会被覆盖，而不是等后端拒绝
+        if (view === "create") {
+          const existing = (doc && doc.presets ? doc.presets[idClean] : undefined) ||
+            (presetRoster.find((row) => row.id === idClean));
+          if (existing) {
+            setSaveConflict({ id: idClean, name: (existing && (existing.name || existing.displayName)) || idClean });
+            setNotice({
+              kind: "error",
+              text: `预设 ID「${idClean}」已存在，请选择另存为或覆盖。`,
+            });
+            return;
+          }
+          submitPreset("error");
+          return;
+        }
+        submitPreset("overwrite");
       };
 
-      // 删除预设
+      // 删除预设：先 dryRun 拿到"会被连带清理"的目录规则，让用户看得见再删。
       const handleDelete = (id) => {
         setBusy(true);
         fetch("/dsh-preset-editor/delete", {
@@ -654,7 +694,23 @@ window.__ModuleLoader__.load({
           .then((d) => {
             if (d.ok) {
               setDoc(d.doc);
-              setNotice({ kind: "ok", text: "预设已成功删除。" });
+              const removedRules = Array.isArray(d.removedRules) ? d.removedRules : [];
+              const extra = removedRules.length > 0
+                ? `，并清理了 ${removedRules.length} 条引用它的目录规则`
+                : "";
+              setNotice({ kind: "ok", text: "预设已成功删除" + extra + "。" });
+              // 规则被连带清理：同步刷新「项目默认」草稿，避免残留旧条目又保存回去
+              if (removedRules.length > 0) {
+                setProjectDraft(cloneProjectDefaults(d.doc && d.doc.projectDefaults));
+                setProjectInfo((prev) => {
+                  const base = prev && typeof prev === "object" ? prev : {};
+                  const rules = Array.isArray(base.rules) ? base.rules : [];
+                  return {
+                    ...base,
+                    rules: rules.filter((rule) => rule.presetId !== id),
+                  };
+                });
+              }
               if (view === "edit" && draft && draft.id === id) {
                 setView("current");
                 setDraft(null);
@@ -669,6 +725,24 @@ window.__ModuleLoader__.load({
             setDeleteConfirmId(null);
           });
       };
+
+      // 删除确认前预检：列出引用该预设的目录规则（null 表示无需展示额外信息）
+      const [deleteImpact, setDeleteImpact] = useState(null);
+      const loadDeleteImpact = useCallback((id) => {
+        setDeleteImpact(null);
+        fetch("/dsh-preset-editor/delete", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ id, dryRun: true }),
+        })
+          .then((r) => r.json())
+          .then((d) => {
+            if (d.ok && Array.isArray(d.rules) && d.rules.length > 0) {
+              setDeleteImpact({ id, rules: d.rules, modelBinding: d.modelBinding || null });
+            }
+          })
+          .catch(() => {});
+      }, []);
 
       // 导出单个预设
       const handleExportSingle = (id, name) => {
@@ -700,11 +774,21 @@ window.__ModuleLoader__.load({
             setNotice({ kind: "error", text: "文件内容为空" });
             return;
           }
+          // 整体备份（带 presets 对象）= 恢复场景，允许覆盖同名预设；
+          // 单个预设 = 往库里加一个，默认不覆盖，撞车时提示改名。
+          let isFullBackup = false;
+          try {
+            const parsed = JSON.parse(raw);
+            isFullBackup = Boolean(parsed && parsed.presets && typeof parsed.presets === "object");
+          } catch {
+            setNotice({ kind: "error", text: "文件不是合法的 JSON" });
+            return;
+          }
           setBusy(true);
           fetch("/dsh-preset-editor/import", {
             method: "POST",
             headers: { "content-type": "application/json" },
-            body: JSON.stringify({ raw }),
+            body: JSON.stringify({ raw, onConflict: isFullBackup ? "overwrite" : "error" }),
           })
             .then((r) => r.json())
             .then((d) => {
@@ -948,22 +1032,84 @@ window.__ModuleLoader__.load({
       };
 
       // 渲染当前预设列表视图（初次安装默认为空）
+      // 存储文件里无法规范化的条目（v1.11.0 起不再静默删除，改为这里显式清理）
+      const invalidPresets = (doc && Array.isArray(doc.invalidPresets) ? doc.invalidPresets : []);
+      const handlePurgeInvalid = (keys) => {
+        setBusy(true);
+        fetch("/dsh-preset-editor/purge-invalid", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(keys ? { keys } : {}),
+        })
+          .then((r) => r.json())
+          .then((d) => {
+            if (d.ok) {
+              setDoc(d.doc);
+              setNotice({
+                kind: "ok",
+                text: `已清理 ${(d.removed || []).length} 条无法加载的条目。`,
+              });
+            } else {
+              setNotice({ kind: "error", text: "清理失败: " + (d.error || "") });
+            }
+          })
+          .catch((e) => setNotice({ kind: "error", text: "清理失败: " + e.message }))
+          .finally(() => setBusy(false));
+      };
+
+      const renderInvalidPresets = () => {
+        if (invalidPresets.length === 0) return null;
+        return h("div", { style: Object.assign({}, S.card, { gap: "10px" }) },
+          h("div", { style: { fontSize: "14px", fontWeight: 650, color: THEME.warning } },
+            `⚠ ${invalidPresets.length} 条预设无法加载（存储文件里的坏数据）`),
+          h("div", { style: { fontSize: "12px", color: THEME.muted, lineHeight: 1.6 } },
+            "这些条目不符合预设结构（例如消息角色写错、ID 非法），会被跳过加载，但",
+            h("strong", { style: { color: THEME.ink } }, " 原样保留在存储文件里"),
+            "——旧版本会在下次任意保存时把它们悄悄删掉。确认不需要了再清理。"),
+          h("div", { style: { display: "flex", flexDirection: "column", gap: "6px" } },
+            invalidPresets.map((entry) => h("div", {
+              key: entry.key,
+              style: {
+                padding: "8px 10px",
+                borderRadius: "6px",
+                border: "1px solid " + THEME.borderLight,
+                background: "rgba(255,255,255,.02)",
+              },
+            },
+              h("code", { style: { fontSize: "12px", color: THEME.accent, fontWeight: 700 } }, entry.key),
+              h("div", { style: { fontSize: "11px", color: THEME.dim, marginTop: "2px" } }, entry.error || ""),
+            )),
+          ),
+          h("div", { style: { display: "flex", gap: "8px", flexWrap: "wrap" } },
+            h("button", {
+              style: Object.assign({}, S.btnSecondary, { padding: "5px 12px", fontSize: "12px" }),
+              disabled: busy,
+              onClick: () => handlePurgeInvalid(),
+            }, "清理这些条目"),
+          ),
+        );
+      };
+
       const renderCurrentView = () => {
         if (!doc) {
           return h("p", { style: { color: THEME.muted, fontSize: "13px" } }, "正在读取预设…");
         }
 
         if (presetsList.length === 0) {
-          return h("div", { style: Object.assign({}, S.card, { alignItems: "center", padding: "48px 20px" }) },
-            h("div", { style: { fontSize: "36px", marginBottom: "8px" } }, "📝"),
-            h("p", { style: { color: THEME.ink, fontSize: "15px", fontWeight: 600, margin: "0 0 6px" } }, "暂无任何自定义预设"),
-            h("p", { style: { color: THEME.muted, fontSize: "13px", margin: "0 0 18px", textAlign: "center", maxWidth: "420px" } },
-              "点击下方按钮新建您的第一个专属预设，保存后可在聊天页面右上角一键切换，享受全套自定义提示词与配备工具。"),
-            h("button", { style: S.btnPrimary, onClick: handleOpenCreate }, "+ 新建预设"),
+          return h("div", { style: { display: "flex", flexDirection: "column", gap: "12px" } },
+            renderInvalidPresets(),
+            h("div", { style: Object.assign({}, S.card, { alignItems: "center", padding: "48px 20px" }) },
+              h("div", { style: { fontSize: "36px", marginBottom: "8px" } }, "📝"),
+              h("p", { style: { color: THEME.ink, fontSize: "15px", fontWeight: 600, margin: "0 0 6px" } }, "暂无任何自定义预设"),
+              h("p", { style: { color: THEME.muted, fontSize: "13px", margin: "0 0 18px", textAlign: "center", maxWidth: "420px" } },
+                "点击下方按钮新建您的第一个专属预设，保存后可在聊天页面右上角一键切换，享受全套自定义提示词与配备工具。"),
+              h("button", { style: S.btnPrimary, onClick: handleOpenCreate }, "+ 新建预设"),
+            ),
           );
         }
 
         return h("div", { style: { display: "flex", flexDirection: "column", gap: "12px" } },
+          renderInvalidPresets(),
           h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center" } },
             h("span", { style: { fontSize: "13px", color: THEME.muted } }, `共 ${presetsList.length} 个已配置预设（已无缝同步至官方 Agent 自定义预设）`),
           ),
@@ -1051,14 +1197,23 @@ window.__ModuleLoader__.load({
                       }, "确认删除"),
                       h("button", {
                         style: Object.assign({}, S.btnSecondary, { padding: "4px 8px", fontSize: "11px" }),
-                        onClick: (e) => { e.stopPropagation(); setDeleteConfirmId(null); },
+                        onClick: (e) => { e.stopPropagation(); setDeleteConfirmId(null); setDeleteImpact(null); },
                       }, "取消"),
                     )
                     : h("button", {
                       style: Object.assign({}, S.btnSecondary, { padding: "4px 10px", fontSize: "12px", color: THEME.danger }),
-                      onClick: (e) => { e.stopPropagation(); setDeleteConfirmId(p.id); },
+                      onClick: (e) => { e.stopPropagation(); setDeleteConfirmId(p.id); loadDeleteImpact(p.id); },
                     }, "删除"),
                 ),
+                deleteConfirmId === p.id && deleteImpact && deleteImpact.id === p.id
+                  ? h("div", { style: Object.assign({}, S.warningBanner, { fontSize: "12px", alignItems: "flex-start" }) },
+                      h("span", null,
+                        `⚠ 删除会同时清理 ${deleteImpact.rules.length} 条指向它的目录规则：`,
+                        deleteImpact.rules.map((rule) => rule.path).join("、"),
+                        deleteImpact.modelBinding ? "（并清除默认模型绑定）" : "",
+                      ),
+                    )
+                  : null,
               );
             }),
           ),
@@ -1625,6 +1780,37 @@ window.__ModuleLoader__.load({
             ),
           ),
 
+          // 新建时 ID 撞车：必须显式选择，绝不静默覆盖已有预设
+          saveConflict && saveConflict.id === draft.id.trim().toLowerCase()
+            ? h("div", { style: Object.assign({}, S.warningBanner, { alignItems: "flex-start" }) },
+                h("span", { style: { fontSize: "16px", flexShrink: 0 } }, "⚠️"),
+                h("div", { style: { flex: 1, minWidth: 0 } },
+                  h("strong", null, `预设 ID「${saveConflict.id}」已存在`),
+                  saveConflict.name && saveConflict.name !== saveConflict.id
+                    ? `（${saveConflict.name}）`
+                    : "",
+                  "。覆盖会让旧预设的提示词与工具配置永久丢失，请确认后再选。",
+                  h("div", { style: { display: "flex", gap: "8px", marginTop: "8px", flexWrap: "wrap" } },
+                    h("button", {
+                      style: Object.assign({}, S.btnPrimary, { padding: "5px 12px", fontSize: "12px" }),
+                      disabled: busy,
+                      onClick: () => submitPreset("rename"),
+                    }, "另存为新的 ID"),
+                    h("button", {
+                      style: Object.assign({}, S.btnDanger, { padding: "5px 12px", fontSize: "12px" }),
+                      disabled: busy,
+                      onClick: () => submitPreset("overwrite"),
+                    }, "确认覆盖旧预设"),
+                    h("button", {
+                      style: Object.assign({}, S.btnSecondary, { padding: "5px 12px", fontSize: "12px" }),
+                      disabled: busy,
+                      onClick: () => setSaveConflict(null),
+                    }, "返回改 ID"),
+                  ),
+                ),
+              )
+            : null,
+
           // 顶部标题与操作栏
           h("div", { style: { display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: "10px" } },
             h("h2", { style: { margin: 0, fontSize: "18px", fontWeight: 700 } }, pageTitle),
@@ -1658,16 +1844,30 @@ window.__ModuleLoader__.load({
                   }, "确认删除"),
                   h("button", {
                     style: S.btnSecondary,
-                    onClick: () => setDeleteConfirmId(null),
+                    onClick: () => { setDeleteConfirmId(null); setDeleteImpact(null); },
                   }, "取消"),
                 )
                 : h("button", {
                   style: S.btnDanger,
-                  onClick: () => setDeleteConfirmId(draft.id),
+                  onClick: () => { setDeleteConfirmId(draft.id); loadDeleteImpact(draft.id); },
                 }, "删除预设")
               ) : null,
             ),
           ),
+
+          // 删除影响提示：删除预设会连带清理的目录规则
+          !isCreate && deleteConfirmId === draft.id && deleteImpact && deleteImpact.id === draft.id
+            ? h("div", { style: Object.assign({}, S.warningBanner, { alignItems: "flex-start" }) },
+                h("span", { style: { fontSize: "16px", flexShrink: 0 } }, "⚠️"),
+                h("div", null,
+                  h("strong", null, `删除后会同时清理 ${deleteImpact.rules.length} 条指向它的目录规则：`),
+                  deleteImpact.rules.map((rule) => rule.path).join("、"),
+                  deleteImpact.modelBinding ? "（并清除它的默认模型绑定）" : "",
+                  h("div", { style: { marginTop: "4px", color: THEME.muted } },
+                    "旧版本不会清理这些规则，导致「项目默认」表单之后再也保存不了；现在随删除一并处理。"),
+                ),
+              )
+            : null,
 
           // 基本属性输入卡片
           h("div", { style: S.card },
